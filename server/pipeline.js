@@ -32,7 +32,7 @@ export function createPipeline({ translator, speak, send, sendAudio, canSpeak = 
     const listenerName = partnerSeat(seatName);
     const listener = room.seats[listenerName];
     const id = ++turnCounter;
-    const turn = { id, speaker: seatName, original: text, language: speaker.input };
+    const turn = { id, speaker: seatName, original: text, from: speaker.input, language: speaker.input };
 
     // The speaker sees their own sentence at once; it is also what the listener
     // falls back to if translation fails below.
@@ -69,7 +69,10 @@ export function createPipeline({ translator, speak, send, sendAudio, canSpeak = 
     }
     room.history.push({ speaker: seatName, original: text });
     send(room, listenerName, { type: 'turn', ...turn, translated, language: listener.output });
-    send(room, seatName, { type: 'translation', id, translated });
+    send(room, seatName, { type: 'translation', id, translated, language: listener.output });
+    // What was asked of whom, never what was said: enough to answer "which language and
+    // voice did that use" from the deploy log without keeping anyone's conversation.
+    console.log(`room ${room.id.slice(0, 4)}: ${speaker.input}->${listener.output}, voice ${speaker.voice}, ${text.length}->${translated.length} chars`);
 
     if (!canSpeak(listener.output)) {
       // The text is already on their screen. Said once per sentence, in the status

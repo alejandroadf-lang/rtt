@@ -236,7 +236,7 @@ function onMessage(m) {
   else if (m.type === 'turn') showTurn(m);
   else if (m.type === 'translation') {
     const row = turns.get(m.id);
-    if (row) row.small.textContent = `They hear: ${m.translated}`;
+    if (row) row.small.textContent = `They hear (${label(m.language)}): ${m.translated}`;
   } else if (m.type === 'error') setStatus(m.message, true);
 }
 
@@ -259,7 +259,7 @@ function showTurn(m) {
   if (m.translated !== null && m.translated !== undefined) {
     row.el.className = 'turn them';
     row.big.textContent = m.translated;
-    row.small.textContent = `Original: ${m.original}`;
+    row.small.textContent = `Original (${label(m.from)}): ${m.original}${m.language ? ` - spoken in ${label(m.language)}` : ''}`;
   } else if (m.error) {
     row.el.className = 'turn them';
     row.big.textContent = m.original;
