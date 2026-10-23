@@ -37,6 +37,12 @@ export function hasVoice(code, env = process.env) {
   return override.length ? override.includes(code) : code in VOICE_LANGUAGES;
 }
 
+// ElevenLabs' own premade voices, which every account has. Two different ones, so the
+// two people in a room sound different from the first sentence; each can choose
+// another. `voice` is how the OTHER person hears you when your words are translated.
+export const DEFAULT_VOICES = { host: 'JBFqnCBsd6RMkjVDRZzb', guest: 'EXAVITQu4vr4xnSDxMaL' };
+const VOICE_ID = /^[A-Za-z0-9]{10,40}$/;
+
 const ROOM_TTL_MS = 4 * 3_600_000;
 const rooms = new Map();
 
@@ -60,8 +66,8 @@ export function createRoom(now = Date.now()) {
     // language the person speaks; `output` the one they want to hear and read. They are
     // usually the same, and null until the person has chosen.
     seats: {
-      host: { token: id(18), input: null, output: null, socket: null },
-      guest: { token: id(18), input: null, output: null, socket: null },
+      host: { token: id(18), input: null, output: null, voice: DEFAULT_VOICES.host, socket: null },
+      guest: { token: id(18), input: null, output: null, voice: DEFAULT_VOICES.guest, socket: null },
     },
     history: [],
     secondsUsed: 0,
@@ -80,6 +86,12 @@ export function setLanguages(room, seatName, { input, output }) {
   seat.input = input;
   seat.output = output;
   return { changedInput };
+}
+
+/** Sets the voice this person is heard in, or throws a sentence saying why not. */
+export function setVoice(room, seatName, voiceId) {
+  if (!VOICE_ID.test(String(voiceId || ''))) throw new Error('That is not a voice id. Pick one from the list.');
+  room.seats[seatName].voice = voiceId;
 }
 
 export function getRoom(roomId, now = Date.now()) {

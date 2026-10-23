@@ -159,3 +159,22 @@ export async function checkElevenLabs(config = voiceConfig()) {
     };
   }
 }
+
+/**
+ * The voices this account can speak with, for the picker: id, name, a one-line
+ * description and the URL of a sample ElevenLabs hosts, so "listen to it" costs
+ * nothing. Premade voices first (every account has them), then the rest by name.
+ */
+export async function listVoices(config = voiceConfig()) {
+  const res = await getClient(config).voices.search({ pageSize: 100 });
+  const rank = (v) => (v.category === 'premade' ? 0 : 1);
+  return (res.voices || [])
+    .map((v) => ({
+      id: v.voiceId,
+      name: v.name || v.voiceId,
+      description: [v.labels?.gender, v.labels?.accent, v.labels?.descriptive || v.labels?.description || v.description].filter(Boolean).join(', ').slice(0, 80),
+      previewUrl: v.previewUrl || null,
+      category: v.category || null,
+    }))
+    .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+}

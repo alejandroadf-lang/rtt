@@ -563,3 +563,82 @@ test('closing a session on purpose (changing language) does not look like a drop
   host.ws.close();
   stop(app.server);
 });
+
+// ── voices ───────────────────────────────────────────────────────────────────
+
+test('each person is heard in a different voice by default, and the translation is spoken in the speaker\'s voice', async () => {
+  const spoken = [];
+  const said = {};
+  const app = createApp({
+    env: ENV,
+    translator: { translate: async ({ text }) => text },
+    listen: async ({ language, onCommitted }) => { said[language] = onCommitted; return { send() {}, close() {} }; },
+    speak: async (args) => { spoken.push(args); },
+  });
+  const base = await start(app.server);
+  const made = await newRoom(base, ['es', 'es'], ['ar', 'ar']);
+  const host = await open(base, made.roomId, made.hostToken);
+  const guest = await open(base, made.roomId, made.guestToken);
+  await until(() => host.messages.some((m) => m.type === 'partner'));
+  const info = async (token) => (await fetch(`${base}/api/rooms/${made.roomId}`, { headers: { 'x-room-token': token } })).json();
+  const hostVoice = (await info(made.hostToken)).yourVoice;
+  const guestVoice = (await info(made.guestToken)).yourVoice;
+  assert.notEqual(hostVoice, guestVoice, 'two different voices from the start');
+
+  said.es('Hola');
+  await until(() => spoken.length === 1);
+  assert.equal(spoken[0].voiceId, hostVoice, 'the host\'s words are spoken in the host\'s voice');
+  said.ar('Marhaba');
+  await until(() => spoken.length === 2);
+  assert.equal(spoken[1].voiceId, guestVoice);
+  host.ws.close();
+  guest.ws.close();
+  stop(app.server);
+});
+
+test('choosing a voice is remembered and used, and something that is not a voice id is refused', async () => {
+  const spoken = [];
+  const said = {};
+  const app = createApp({
+    env: ENV,
+    translator: { translate: async ({ text }) => text },
+    listen: async ({ language, onCommitted }) => { said[language] = onCommitted; return { send() {}, close() {} }; },
+    speak: async (args) => { spoken.push(args); },
+  });
+  const base = await start(app.server);
+  const made = await newRoom(base, ['es', 'es'], ['ar', 'ar']);
+  const put = (voice) => fetch(`${base}/api/rooms/${made.roomId}/me`, { method: 'PUT', headers: { 'x-room-token': made.hostToken }, body: JSON.stringify({ input: 'es', output: 'es', voice }) });
+  assert.equal((await put('21m00Tcm4TlvDq8ikWAM')).status, 200);
+  const bad = await put('../../etc/passwd');
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /not a voice id/);
+  const host = await open(base, made.roomId, made.hostToken);
+  const guest = await open(base, made.roomId, made.guestToken);
+  await until(() => host.messages.some((m) => m.type === 'partner'));
+  said.es('Hola');
+  await until(() => spoken.length === 1);
+  assert.equal(spoken[0].voiceId, '21m00Tcm4TlvDq8ikWAM', 'the refused value changed nothing; the chosen voice is used');
+  host.ws.close();
+  guest.ws.close();
+  stop(app.server);
+});
+
+test('the voice list needs a room token, comes from the server\'s key, and is not fetched on every visit', async () => {
+  let fetched = 0;
+  const app = createApp({
+    env: ENV, translator: {}, listen: async () => ({}), speak: async () => {},
+    voices: async () => { fetched += 1; return [{ id: 'abc1234567890', name: 'Ana', description: 'female, neutral', previewUrl: 'https://example.test/ana.mp3' }]; },
+  });
+  const base = await start(app.server);
+  const made = await newRoom(base);
+  const anon = await fetch(`${base}/api/voices?room=${made.roomId}`);
+  assert.equal(anon.status, 404);
+  const wrong = await fetch(`${base}/api/voices?room=${made.roomId}`, { headers: { 'x-room-token': 'guess' } });
+  assert.equal(wrong.status, 404);
+  assert.equal(fetched, 0, 'nothing was fetched for someone without a token');
+  const ok = await (await fetch(`${base}/api/voices?room=${made.roomId}`, { headers: { 'x-room-token': made.hostToken } })).json();
+  assert.equal(ok.voices[0].name, 'Ana');
+  await fetch(`${base}/api/voices?room=${made.roomId}`, { headers: { 'x-room-token': made.guestToken } });
+  assert.equal(fetched, 1, 'the second request reused the first answer');
+  stop(app.server);
+});

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { createRoom, getRoom, seatFor, partnerSeat, setLanguages, hasVoice, LANGUAGES } from './rooms.js';
+import { createRoom, getRoom, seatFor, partnerSeat, setLanguages, setVoice, hasVoice, LANGUAGES } from './rooms.js';
 import { addDocument, keyterms, MAX_DOC_BYTES } from './docs.js';
 import { createPipeline } from './pipeline.js';
 import { MIC_SAMPLE_RATE } from './voice.js';
@@ -50,10 +50,11 @@ const sha = (text) => crypto.createHash('sha256').update(String(text)).digest();
 const MISS_LIMIT = 8;
 const MISS_WINDOW_MS = 10 * 60_000;
 
-export function createApp({ env = process.env, translator, listen, speak, check }) {
+export function createApp({ env = process.env, translator, listen, speak, check, voices }) {
   const maxSeconds = (Number(env.ROOM_MAX_MINUTES) || 60) * 60;
 
   const checks = {};
+  const voiceCache = {};
   const misses = new Map(); // client -> [timestamps of wrong codes]
   const sockets = new Map(); // seat object -> { transcriber }
   const sendTo = (room, seatName, message) => {
@@ -126,6 +127,15 @@ export function createApp({ env = process.env, translator, listen, speak, check 
         return json(res, 201, { roomId: room.id, hostToken: room.seats.host.token, guestToken: room.seats.guest.token });
       }
 
+      if (req.method === 'GET' && url.pathname === '/api/voices') {
+        // Only for someone holding a room token: the list is fetched with the server's key.
+        const room = getRoom(url.searchParams.get('room'));
+        if (!room || !seatFor(room, req.headers['x-room-token'])) return json(res, 404, { error: 'No such room, or the link is wrong or has expired.' });
+        if (!voices) return json(res, 503, { error: 'Voices are not available on this server.' });
+        if (!voiceCache.at || Date.now() - voiceCache.at > 600_000) Object.assign(voiceCache, { at: Date.now(), list: await voices() });
+        return json(res, 200, { voices: voiceCache.list });
+      }
+
       const match = url.pathname.match(/^\/api\/rooms\/([\w-]+)(\/docs|\/me)?$/);
       if (match) {
         const room = getRoom(match[1]);
@@ -139,6 +149,7 @@ export function createApp({ env = process.env, translator, listen, speak, check 
             you: seat,
             yourInput: room.seats[seat].input,
             yourOutput: room.seats[seat].output,
+            yourVoice: room.seats[seat].voice,
             theirInput: other.input,
             theirOutput: other.output,
             documents: room.docs.map((d) => d.name),
@@ -149,12 +160,13 @@ export function createApp({ env = process.env, translator, listen, speak, check 
           try {
             const body = await readJson(req);
             const { changedInput } = setLanguages(room, seat, { input: body.input, output: body.output });
+            if (body.voice !== undefined) setVoice(room, seat, body.voice);
             // What the person speaks is what speech-to-text listens for, so changing it
             // restarts listening; changing only what they hear takes effect on the next sentence.
             if (changedInput && room.seats[seat].socket) await startListening(room, seat);
             const mine = room.seats[seat];
             sendTo(room, partnerSeat(seat), { type: 'partner_languages', input: mine.input, output: mine.output });
-            return json(res, 200, { input: mine.input, output: mine.output });
+            return json(res, 200, { input: mine.input, output: mine.output, voice: mine.voice });
           } catch (err) {
             return json(res, err.status || 400, { error: err.message });
           }

@@ -98,6 +98,7 @@ async function enterRoom() {
   $('hear').value = info.yourOutput || $('mine').value;
   showTheirs(info.theirInput, info.theirOutput);
   renderDocs(info.documents);
+  await fillVoices(info.yourVoice);
   setStatus(info.partnerHere ? 'They are here.' : 'Waiting for them to open their link.');
 
   // Both are saved before the socket opens, because speech-to-text starts in the
@@ -113,6 +114,8 @@ async function enterRoom() {
     saveLanguages();
   });
   $('hear').addEventListener('change', saveLanguages);
+  $('voice').addEventListener('change', saveLanguages);
+  $('listen').addEventListener('click', listenToVoice);
 
   $('file').addEventListener('change', async (e) => {
     for (const file of e.target.files) {
@@ -132,6 +135,31 @@ async function enterRoom() {
   updateSoundButton();
 }
 
+// The voice the other person hears when your words are translated. The sample is a
+// short recording ElevenLabs hosts for each voice, so listening costs nothing.
+let voiceList = [];
+
+async function fillVoices(current) {
+  try {
+    voiceList = (await api(`/api/voices?room=${encodeURIComponent(roomId)}`)).voices;
+  } catch (err) {
+    voiceList = [];
+    setStatus(`The voice list is unavailable (${err.message}). The default voice is used.`, true);
+  }
+  const options = voiceList.map((v) => new Option(`${v.name}${v.description ? ` - ${v.description}` : ''}`, v.id));
+  // A voice the account's list does not show (the default) is still the current one.
+  if (current && !voiceList.some((v) => v.id === current)) options.unshift(new Option('Default voice', current));
+  $('voice').replaceChildren(...options);
+  if (current) $('voice').value = current;
+}
+
+function listenToVoice() {
+  const voice = voiceList.find((v) => v.id === $('voice').value);
+  if (!voice?.previewUrl) return setStatus('There is no sample for this voice.', true);
+  unlockSound();
+  new Audio(voice.previewUrl).play().catch(() => setStatus('The sample could not be played. Tap the page once, then try again.', true));
+}
+
 const names = new Intl.DisplayNames(['en'], { type: 'language' });
 const label = (code) => (code ? names.of(code) : 'not chosen yet');
 
@@ -144,7 +172,7 @@ function fillLanguages(languages, voiceLanguages) {
 async function saveLanguages() {
   checkSetup();
   try {
-    await api(`/api/rooms/${encodeURIComponent(roomId)}/me`, { method: 'PUT', body: JSON.stringify({ input: $('mine').value, output: $('hear').value }) });
+    await api(`/api/rooms/${encodeURIComponent(roomId)}/me`, { method: 'PUT', body: JSON.stringify({ input: $('mine').value, output: $('hear').value, voice: $('voice').value || undefined }) });
   } catch (err) {
     setStatus(err.message, true);
   }

@@ -79,7 +79,7 @@ export function createPipeline({ translator, speak, send, sendAudio, canSpeak = 
     }
     try {
       send(room, listenerName, { type: 'audio_start', id });
-      await speak({ text: translated, language: listener.output }, (audio) => sendAudio(room, listenerName, audio));
+      await speak({ text: translated, language: listener.output, voiceId: speaker.voice }, (audio) => sendAudio(room, listenerName, audio));
     } catch (err) {
       // The text already arrived above, so the other person can still read it.
       send(room, listenerName, { type: 'error', message: `Could not speak the translation (shown as text): ${err.message}` });

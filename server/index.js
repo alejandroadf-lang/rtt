@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createApp, describeStatus } from './app.js';
 import { createTranslator } from './translate.js';
-import { listen, speak, checkElevenLabs } from './voice.js';
+import { listen, speak, checkElevenLabs, listVoices } from './voice.js';
 
 const status = describeStatus(process.env);
 if (!status.ready) {
@@ -28,6 +28,6 @@ const check = async () => {
   return { elevenlabs: await checkElevenLabs(), anthropic: claude };
 };
 
-const { server } = createApp({ env: process.env, translator, listen, speak, check });
+const { server } = createApp({ env: process.env, translator, listen, speak, check, voices: listVoices });
 const port = Number(process.env.PORT) || 3000;
 server.listen(port, () => console.log(`Interpreter Room on :${port}`));
