@@ -6,6 +6,15 @@
 // names of files they attached, are not markup.
 
 const $ = (id) => document.getElementById(id);
+// What this browser saw, kept for "Copy diagnostics": connection changes, errors and
+// how much audio arrived. No audio and no microphone data is stored.
+const clientLog = [];
+const note = (event) => {
+  clientLog.push({ at: new Date().toISOString().slice(11, 23), ...event });
+  if (clientLog.length > 80) clientLog.shift();
+};
+const audioStats = { chunks: 0, bytes: 0 };
+
 const roomId = location.pathname.startsWith('/r/') ? location.pathname.slice(3) : null;
 const token = decodeURIComponent(location.hash.slice(1));
 
@@ -130,6 +139,8 @@ async function enterRoom() {
   });
   $('mic').addEventListener('click', () => (micStream ? stopMic() : startMic()));
   $('sound').addEventListener('click', unlockSound);
+  $('diag').hidden = false;
+  $('copyDiag').addEventListener('click', copyDiagnostics);
   // Any first touch anywhere on the page also turns sound on.
   document.addEventListener('pointerdown', unlockSound, { once: true });
   updateSoundButton();
@@ -158,6 +169,35 @@ function listenToVoice() {
   if (!voice?.previewUrl) return setStatus('There is no sample for this voice.', true);
   unlockSound();
   new Audio(voice.previewUrl).play().catch(() => setStatus('The sample could not be played. Tap the page once, then try again.', true));
+}
+
+async function copyDiagnostics() {
+  let server = {};
+  try {
+    server = await api(`/api/rooms/${encodeURIComponent(roomId)}/diagnostics`);
+  } catch (err) {
+    server = { error: err.message };
+  }
+  const report = JSON.stringify({
+    when: new Date().toISOString(),
+    browser: navigator.userAgent,
+    sound: { state: playContext?.state ?? 'not started', sampleRate: playContext?.sampleRate ?? null, ...audioStats },
+    microphoneOn: Boolean(micStream),
+    socket: ws ? ['connecting', 'open', 'closing', 'closed'][ws.readyState] : 'none',
+    pageSettings: { speak: $('mine').value, hear: $('hear').value, voice: $('voice').value },
+    server,
+    browserEvents: clientLog.slice(-40),
+  }, null, 1);
+  $('diagText').hidden = false;
+  $('diagText').value = report;
+  try {
+    await navigator.clipboard.writeText(report);
+    setStatus('Diagnostics copied. Paste them into your message.');
+  } catch {
+    // Some phones refuse clipboard writes: the text is in the box below to select and copy.
+    $('diagText').select();
+    setStatus('Select the text in the box below and copy it.');
+  }
 }
 
 const names = new Intl.DisplayNames(['en'], { type: 'language' });
@@ -210,9 +250,10 @@ let attempts = 0;
 function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?room=${encodeURIComponent(roomId)}&token=${encodeURIComponent(token)}`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { attempts = 0; };
+  ws.onopen = () => { attempts = 0; note({ type: 'socket_open' }); };
   ws.onmessage = (e) => (typeof e.data === 'string' ? onMessage(JSON.parse(e.data)) : playPcm(e.data));
   ws.onclose = (e) => {
+    note({ type: 'socket_closed', code: e.code });
     if (e.code >= 4000) {
       stopMic();
       setStatus(e.code === 4000 ? 'This room is open in another tab.' : e.code === 4002 ? 'This room has used its time. Start a new one.' : 'The room closed the connection.', true);
@@ -228,6 +269,7 @@ function connect() {
 }
 
 function onMessage(m) {
+  if (['status', 'error', 'text_only', 'audio_start', 'audio_end', 'partner', 'ready'].includes(m.type)) note({ type: m.type, message: m.message, id: m.id, language: m.language });
   if (m.type === 'ready') setStatus(m.partnerHere ? 'They are here.' : 'Waiting for them to open their link.');
   else if (m.type === 'partner') setStatus(m.here ? 'They are here.' : 'They left.');
   else if (m.type === 'partner_languages') showTheirs(m.input, m.output);
@@ -322,6 +364,9 @@ function updateSoundButton() {
 // ── The other person's voice ─────────────────────────────────────────────────
 
 function playPcm(buffer) {
+  audioStats.chunks += 1;
+  audioStats.bytes += buffer.byteLength;
+  if (audioStats.chunks === 1) note({ type: 'first_audio_chunk', soundState: playContext?.state ?? 'none' });
   playContext ??= new AudioContext({ sampleRate: 24000 });
   if (playContext.state !== 'running') {
     playContext.resume().catch(() => {});

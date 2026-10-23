@@ -70,6 +70,9 @@ export function createRoom(now = Date.now()) {
       guest: { token: id(18), input: null, output: null, voice: DEFAULT_VOICES.guest, socket: null },
     },
     history: [],
+    // What happened in this room, newest last, for the "copy diagnostics" button.
+    // Memory only, like everything else here, and gone with the room.
+    log: [],
     secondsUsed: 0,
   };
   rooms.set(room.id, room);
@@ -92,6 +95,12 @@ export function setLanguages(room, seatName, { input, output }) {
 export function setVoice(room, seatName, voiceId) {
   if (!VOICE_ID.test(String(voiceId || ''))) throw new Error('That is not a voice id. Pick one from the list.');
   room.seats[seatName].voice = voiceId;
+}
+
+/** Records one event for the room's diagnostics. The newest 200 are kept. */
+export function logEvent(room, event) {
+  room.log.push({ at: new Date().toISOString(), ...event });
+  if (room.log.length > 200) room.log.splice(0, room.log.length - 200);
 }
 
 export function getRoom(roomId, now = Date.now()) {

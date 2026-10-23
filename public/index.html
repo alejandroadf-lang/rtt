@@ -95,6 +95,13 @@
     <div id="log" role="log" aria-live="polite"></div>
   </section>
 
+  <section id="diag" hidden>
+    <h2>Something wrong?</h2>
+    <p>Copies what this room recorded (languages, voices, timings, errors, no audio) so it can be pasted into a message for help.</p>
+    <p style="margin-top:10px"><button id="copyDiag" class="quiet" type="button">Copy diagnostics</button></p>
+    <textarea id="diagText" readonly rows="8" hidden aria-label="Diagnostics" style="width:100%;margin-top:10px;font:12px/1.4 ui-monospace,monospace;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px"></textarea>
+  </section>
+
   <section id="docs" hidden>
     <h2>Documents for this conversation</h2>
     <p>Text files (.txt, .md, .csv, .json, .html). Names, terms and wording in them are used when translating. The other person sees the file names (not the contents) when they open the room.</p>

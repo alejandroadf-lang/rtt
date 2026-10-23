@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { createRoom, getRoom, seatFor, partnerSeat, setLanguages, setVoice, hasVoice, LANGUAGES } from './rooms.js';
+import { createRoom, getRoom, seatFor, partnerSeat, setLanguages, setVoice, hasVoice, logEvent, LANGUAGES } from './rooms.js';
 import { addDocument, keyterms, MAX_DOC_BYTES } from './docs.js';
 import { createPipeline } from './pipeline.js';
 import { MIC_SAMPLE_RATE } from './voice.js';
@@ -65,6 +65,7 @@ export function createApp({ env = process.env, translator, listen, speak, check,
     translator,
     speak,
     canSpeak: (code) => hasVoice(code, env),
+    log: logEvent,
     send: sendTo,
     sendAudio: (room, seatName, audio) => {
       const ws = room.seats[seatName].socket;
@@ -136,13 +137,16 @@ export function createApp({ env = process.env, translator, listen, speak, check,
         return json(res, 200, { voices: voiceCache.list });
       }
 
-      const match = url.pathname.match(/^\/api\/rooms\/([\w-]+)(\/docs|\/me)?$/);
+      const match = url.pathname.match(/^\/api\/rooms\/([\w-]+)(\/docs|\/me|\/diagnostics)?$/);
       if (match) {
         const room = getRoom(match[1]);
         const seat = room && seatFor(room, req.headers['x-room-token']);
         // The same answer for "no such room" and "wrong token": a guess learns nothing.
         if (!room || !seat) return json(res, 404, { error: 'No such room, or the link is wrong or has expired.' });
 
+        if (req.method === 'GET' && match[2] === '/diagnostics') {
+          return json(res, 200, { you: seat, room: room.id, languages: Object.fromEntries(Object.entries(room.seats).map(([n, x]) => [n, { speaks: x.input, hears: x.output, voice: x.voice, here: Boolean(x.socket) }])), documents: room.docs.map((d) => d.name), events: room.log });
+        }
         if (req.method === 'GET' && !match[2]) {
           const other = room.seats[partnerSeat(seat)];
           return json(res, 200, {
@@ -165,6 +169,7 @@ export function createApp({ env = process.env, translator, listen, speak, check,
             // restarts listening; changing only what they hear takes effect on the next sentence.
             if (changedInput && room.seats[seat].socket) await startListening(room, seat);
             const mine = room.seats[seat];
+            logEvent(room, { type: 'settings', seat, speaks: mine.input, hears: mine.output, voice: mine.voice });
             sendTo(room, partnerSeat(seat), { type: 'partner_languages', input: mine.input, output: mine.output });
             return json(res, 200, { input: mine.input, output: mine.output, voice: mine.voice });
           } catch (err) {
@@ -220,14 +225,17 @@ export function createApp({ env = process.env, translator, listen, speak, check,
   async function startListening(room, seatName) {
     const seat = room.seats[seatName];
     dropListener(seat);
-    const fail = (err) => sendTo(room, seatName, { type: 'error', message: err.message });
+    const fail = (err) => {
+      logEvent(room, { type: 'error', seat: seatName, message: err.message });
+      sendTo(room, seatName, { type: 'error', message: err.message });
+    };
     const mine = {};
     try {
       mine.transcriber = await listen({
         language: seat.input,
         keyterms: keyterms(room),
         onPartial: (text) => sendTo(room, seatName, { type: 'partial', text }),
-        onCommitted: (text) => runTurn(room, seatName, text),
+        onCommitted: (text) => { logEvent(room, { type: 'heard', seat: seatName, language: seat.input, text: text.slice(0, 80) }); runTurn(room, seatName, text); },
         onError: fail,
         // ElevenLabs closed its side. If this is still the seat's current session and the
         // person is still connected, open a fresh one; at most three times a minute, so a
@@ -237,6 +245,7 @@ export function createApp({ env = process.env, translator, listen, speak, check,
           const now = Date.now();
           seat.restarts = [...(seat.restarts || []).filter((t) => now - t < 60_000), now];
           if (seat.restarts.length > 3) return fail(new Error('Speech-to-text keeps disconnecting. Reload the page to try again.'));
+          logEvent(room, { type: 'speech_to_text_reconnected', seat: seatName });
           sendTo(room, seatName, { type: 'status', message: 'Speech-to-text reconnected.' });
           startListening(room, seatName);
         },
@@ -262,6 +271,7 @@ export function createApp({ env = process.env, translator, listen, speak, check,
     // streaming audio into the same speech-to-text bill.
     if (seat.socket && seat.socket !== ws) seat.socket.close(4000, 'Opened somewhere else');
     seat.socket = ws;
+    logEvent(room, { type: 'connected', seat: seatName, speaks: seat.input, hears: seat.output });
     sendTo(room, partnerName, { type: 'partner', here: true });
     sendTo(room, seatName, { type: 'ready', partnerHere: Boolean(room.seats[partnerName].socket) });
 
@@ -287,6 +297,7 @@ export function createApp({ env = process.env, translator, listen, speak, check,
     ws.on('close', () => {
       if (seat.socket !== ws) return;
       dropListener(seat);
+      logEvent(room, { type: 'disconnected', seat: seatName });
       seat.socket = null;
       sendTo(room, partnerName, { type: 'partner', here: false });
     });

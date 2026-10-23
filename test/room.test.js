@@ -642,3 +642,71 @@ test('the voice list needs a room token, comes from the server\'s key, and is no
   assert.equal(fetched, 1, 'the second request reused the first answer');
   stop(app.server);
 });
+
+// ── diagnostics ──────────────────────────────────────────────────────────────
+
+test('the diagnostics record who connected, what was heard, how long each step took and what failed, and need a token', async () => {
+  const said = {};
+  const app = createApp({
+    env: ENV,
+    translator: { translate: async ({ text }) => { await new Promise((r) => setTimeout(r, 15)); return `[t] ${text}`; } },
+    listen: async ({ language, onCommitted }) => { said[language] = onCommitted; return { send() {}, close() {} }; },
+    speak: async (args, onAudio) => { onAudio(Buffer.alloc(100)); onAudio(Buffer.alloc(50)); },
+  });
+  const base = await start(app.server);
+  const made = await newRoom(base, ['es', 'es'], ['ar', 'ar']);
+  const host = await open(base, made.roomId, made.hostToken);
+  const guest = await open(base, made.roomId, made.guestToken);
+  await until(() => host.messages.some((m) => m.type === 'partner'));
+  said.es('Hola, ¿cómo estás?');
+  await until(() => guest.audio.length === 2);
+
+  const none = await fetch(`${base}/api/rooms/${made.roomId}/diagnostics`);
+  assert.equal(none.status, 404);
+  const diag = await (await fetch(`${base}/api/rooms/${made.roomId}/diagnostics`, { headers: { 'x-room-token': made.hostToken } })).json();
+  assert.deepEqual(diag.languages.host, { speaks: 'es', hears: 'es', voice: diag.languages.host.voice, here: true });
+  const types = diag.events.map((e) => e.type);
+  assert.ok(types.includes('connected') && types.includes('settings') && types.includes('heard'));
+  const turn = diag.events.find((e) => e.type === 'turn');
+  assert.equal(turn.from, 'es');
+  assert.equal(turn.to, 'ar');
+  assert.equal(turn.spoken, true);
+  assert.equal(turn.audioBytes, 150);
+  assert.ok(turn.translateMs >= 10 && turn.firstAudioMs >= turn.translateMs && turn.totalMs >= turn.firstAudioMs, 'the timings add up in order');
+  assert.equal(turn.translated, '[t] Hola, ¿cómo estás?');
+  host.ws.close();
+  guest.ws.close();
+  stop(app.server);
+});
+
+test('a failed translation and a failed voice are both in the diagnostics with the stage that failed', async () => {
+  const said = {};
+  let calls = 0;
+  const app = createApp({
+    env: ENV,
+    translator: { translate: async ({ text }) => { calls += 1; if (calls === 1) throw new Error('credit balance is too low'); return text; } },
+    listen: async ({ language, onCommitted }) => { said[language] = onCommitted; return { send() {}, close() {} }; },
+    speak: async () => { throw new Error('voice not found'); },
+  });
+  const base = await start(app.server);
+  const made = await newRoom(base, ['es', 'es'], ['ar', 'ar']);
+  const host = await open(base, made.roomId, made.hostToken);
+  const guest = await open(base, made.roomId, made.guestToken);
+  await until(() => host.messages.some((m) => m.type === 'partner'));
+  said.es('uno');
+  said.es('dos');
+  const diagnostics = async () => (await (await fetch(`${base}/api/rooms/${made.roomId}/diagnostics`, { headers: { 'x-room-token': made.guestToken } })).json()).events;
+  await until(async () => true);
+  for (let i = 0; i < 100; i += 1) {
+    const events = await diagnostics();
+    if (events.some((e) => e.type === 'turn_failed') && events.some((e) => e.stage === 'speak')) break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  const events = await diagnostics();
+  assert.match(events.find((e) => e.type === 'turn_failed').message, /credit balance/);
+  assert.equal(events.find((e) => e.type === 'turn_failed').stage, 'translate');
+  assert.match(events.find((e) => e.stage === 'speak').message, /voice not found/);
+  host.ws.close();
+  guest.ws.close();
+  stop(app.server);
+});
