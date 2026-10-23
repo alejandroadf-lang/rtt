@@ -74,9 +74,11 @@
   <section id="room" hidden>
     <div class="row">
       <div><label for="mine">I speak</label><select id="mine"></select></div>
-      <div><label for="hear">I hear</label><select id="hear"></select></div>
+      <div><label for="hear">I hear (same as I speak, normally)</label><select id="hear"></select></div>
     </div>
     <p id="theirs" style="margin-top:10px"></p>
+    <p id="warn" role="alert" style="margin-top:6px;color:var(--warn)" hidden></p>
+    <p style="margin-top:10px"><button id="sound" hidden>Tap to turn on sound</button></p>
     <div class="bar" style="margin-top:12px">
       <span id="status" role="status"></span>
       <button id="mic" aria-pressed="false">Start talking</button>

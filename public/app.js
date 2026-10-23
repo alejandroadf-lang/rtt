@@ -105,7 +105,13 @@ async function enterRoom() {
   // restarts listening itself.
   await saveLanguages();
   connect();
-  $('mine').addEventListener('change', saveLanguages);
+  let lastSpoken = $('mine').value;
+  $('mine').addEventListener('change', () => {
+    // Most people hear what they speak, so changing one moves the other with it.
+    if ($('hear').value === lastSpoken) $('hear').value = $('mine').value;
+    lastSpoken = $('mine').value;
+    saveLanguages();
+  });
   $('hear').addEventListener('change', saveLanguages);
 
   $('file').addEventListener('change', async (e) => {
@@ -120,6 +126,10 @@ async function enterRoom() {
     e.target.value = '';
   });
   $('mic').addEventListener('click', () => (micStream ? stopMic() : startMic()));
+  $('sound').addEventListener('click', unlockSound);
+  // Any first touch anywhere on the page also turns sound on.
+  document.addEventListener('pointerdown', unlockSound, { once: true });
+  updateSoundButton();
 }
 
 const names = new Intl.DisplayNames(['en'], { type: 'language' });
@@ -132,6 +142,7 @@ function fillLanguages(languages, voiceLanguages) {
 }
 
 async function saveLanguages() {
+  checkSetup();
   try {
     await api(`/api/rooms/${encodeURIComponent(roomId)}/me`, { method: 'PUT', body: JSON.stringify({ input: $('mine').value, output: $('hear').value }) });
   } catch (err) {
@@ -139,8 +150,24 @@ async function saveLanguages() {
   }
 }
 
+let theirInput = null;
+let theirOutput = null;
+
 function showTheirs(input, output) {
+  theirInput = input;
+  theirOutput = output;
   $('theirs').textContent = input ? `They speak ${label(input)} and hear ${label(output)}.` : 'They have not chosen their languages yet.';
+  checkSetup();
+}
+
+// The usual mistake: choosing to hear the OTHER person's language. Each side is then
+// set to hear what the other already speaks, so nothing is translated and nothing is spoken.
+function checkSetup() {
+  const warnings = [];
+  if (theirInput && $('hear').value === theirInput) warnings.push(`You are set to hear ${label(theirInput)}, which is what they speak, so their words are not translated for you. To hear them in your language, set "I hear" to the language you understand.`);
+  if (theirOutput && $('mine').value === theirOutput) warnings.push(`They are set to hear ${label(theirOutput)}, which is what you speak, so nothing you say is translated for them.`);
+  $('warn').textContent = warnings.join(' ');
+  $('warn').hidden = !warnings.length;
 }
 
 function renderDocs(names) {
@@ -232,9 +259,7 @@ async function startMic() {
   const node = new AudioWorkletNode(micContext, 'downsampler');
   node.port.onmessage = (e) => ws?.readyState === 1 && ws.send(e.data);
   source.connect(node);
-  // Playback needs a user gesture to start; this click is it.
-  playContext ??= new AudioContext({ sampleRate: 24000 });
-  playContext.resume();
+  unlockSound(); // this tap is the gesture playback needs
   $('mic').textContent = 'Stop talking';
   $('mic').setAttribute('aria-pressed', 'true');
 }
@@ -247,10 +272,33 @@ function stopMic() {
   $('mic').setAttribute('aria-pressed', 'false');
 }
 
+// Browsers keep sound off until the person touches the page, and a listener who only
+// opened the link and waits has not. Without this the translation is spoken into a
+// suspended audio context and nothing is heard. The button stays until sound is on.
+function unlockSound() {
+  playContext ??= new AudioContext({ sampleRate: 24000 });
+  playContext.onstatechange = updateSoundButton;
+  playContext.resume().then(updateSoundButton, updateSoundButton);
+  // iOS only unlocks once something has actually been started in the gesture.
+  const silent = playContext.createBufferSource();
+  silent.buffer = playContext.createBuffer(1, 1, 24000);
+  silent.connect(playContext.destination);
+  silent.start();
+  updateSoundButton();
+}
+
+function updateSoundButton() {
+  $('sound').hidden = playContext?.state === 'running';
+}
+
 // ── The other person's voice ─────────────────────────────────────────────────
 
 function playPcm(buffer) {
   playContext ??= new AudioContext({ sampleRate: 24000 });
+  if (playContext.state !== 'running') {
+    playContext.resume().catch(() => {});
+    updateSoundButton();
+  }
   // A network chunk can end in the middle of a 16-bit sample; the odd byte waits for
   // the next chunk.
   let bytes = new Uint8Array(buffer);
