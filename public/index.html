@@ -80,7 +80,13 @@
       <label for="voice">My voice (how they hear me)</label>
       <div style="display:flex;gap:8px"><select id="voice" style="flex:1"></select><button id="listen" class="quiet" type="button">Listen</button></div>
     </div>
+    <div style="margin-top:12px">
+      <label for="bg">Their own voice, quietly underneath</label>
+      <input id="bg" type="range" min="0" max="40" value="15" style="width:100%" aria-describedby="bgHelp">
+      <p id="bgHelp" style="font-size:.85rem">You hear them faintly while they speak, so you know to wait; the translation follows at full volume. Turn it to 0 to hear only the translation.</p>
+    </div>
     <p id="theirs" style="margin-top:10px"></p>
+    <p id="speaking" role="status" style="font-weight:600;color:var(--accent)" hidden>They are speaking...</p>
     <p id="warn" role="alert" style="margin-top:6px;color:var(--warn)" hidden></p>
     <p style="margin-top:10px"><button id="sound" hidden>Tap to turn on sound</button></p>
     <div class="bar" style="margin-top:12px">

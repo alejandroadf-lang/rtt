@@ -17,6 +17,10 @@ node --env-file=.env server/index.js
 
 Open `http://localhost:3000`, create the room, and send the second link to the other person. Each of you then chooses **I speak** and **I hear** (usually the same language; they can differ, and either can be changed mid-conversation). The page shows what the other person chose. Use headphones: with speakers the microphone hears the other person's translated voice and translates it again.
 
+## Their own voice, underneath
+
+While one person speaks, the other hears that voice faintly underneath, then the translation at full volume, like a conference interpreter: it tells the listener someone is talking and to wait. A slider (0 to 40%, default 15%) sets how loud; 0 turns it off. Only speech is relayed (not room noise), and nothing is stored. Use headphones: through speakers, the faint voice can be picked up by the microphone.
+
 ## Who can create rooms
 
 Creating a room spends your ElevenLabs and Anthropic credit, so it needs `ROOM_ACCESS_CODE` (a word you choose, asked for on the create page; `none` lets anyone). With it unset, rooms are refused and the page says which variable to set. People you invite join through the link you send them and never need the code. Eight wrong guesses from one client lock that client out for ten minutes.

@@ -20,6 +20,28 @@ import { MIC_SAMPLE_RATE } from './voice.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+// Every binary frame to a browser starts with one byte saying what it is:
+//   1 = the translated sentence, 24 kHz mono 16-bit PCM, played at full volume
+//   2 = the other person's own voice as they speak, 16 kHz mono 16-bit PCM, played
+//       quietly underneath, so the listener hears that someone is talking and waits
+export const FRAME = { TRANSLATION: 1, ORIGINAL: 2 };
+
+// Whether a 100 ms frame of microphone audio is speech rather than room noise. Relaying
+// silence would put a constant hiss from the other person's room in the listener's ear.
+const LOUD = 0.02;
+const HANG_MS = 500;
+
+export function loudness(frame) {
+  const samples = frame.length >> 1;
+  if (!samples) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples; i += 1) {
+    const v = frame.readInt16LE(i * 2) / 32768;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / samples);
+}
+
 // A sentence is a few kilobytes of PCM; a frame bigger than this is not microphone audio.
 const MAX_AUDIO_FRAME = 64 * 1024;
 
@@ -69,7 +91,7 @@ export function createApp({ env = process.env, translator, listen, speak, check,
     send: sendTo,
     sendAudio: (room, seatName, audio) => {
       const ws = room.seats[seatName].socket;
-      if (ws?.readyState === 1) ws.send(audio, { binary: true });
+      if (ws?.readyState === 1) ws.send(Buffer.concat([Buffer.from([FRAME.TRANSLATION]), audio]), { binary: true });
     },
   });
   const runTurn = (room, seatName, text) => pipeline.committed(room, seatName, text);
@@ -288,6 +310,13 @@ export function createApp({ env = process.env, translator, listen, speak, check,
       }
       // Not sent means ElevenLabs' side is closed; the close handler is already
       // opening a new session, and this chunk of audio is simply dropped.
+      // The speaker's own voice goes to the other person too, while they speak and for half
+      // a second after, so a pause inside a sentence does not make it flicker.
+      if (loudness(data) > LOUD) seat.loudUntil = Date.now() + HANG_MS;
+      const listener = room.seats[partnerName].socket;
+      if (Date.now() < (seat.loudUntil || 0) && listener?.readyState === 1) {
+        listener.send(Buffer.concat([Buffer.from([FRAME.ORIGINAL]), data]), { binary: true });
+      }
       try {
         sockets.get(seat)?.transcriber.send(data);
       } catch {

@@ -139,6 +139,7 @@ async function enterRoom() {
   });
   $('mic').addEventListener('click', () => (micStream ? stopMic() : startMic()));
   $('sound').addEventListener('click', unlockSound);
+  $('bg').addEventListener('input', () => { if (backgroundGain) backgroundGain.gain.value = Number($('bg').value) / 100; });
   $('diag').hidden = false;
   $('copyDiag').addEventListener('click', copyDiagnostics);
   // Any first touch anywhere on the page also turns sound on.
@@ -251,7 +252,13 @@ function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?room=${encodeURIComponent(roomId)}&token=${encodeURIComponent(token)}`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => { attempts = 0; note({ type: 'socket_open' }); };
-  ws.onmessage = (e) => (typeof e.data === 'string' ? onMessage(JSON.parse(e.data)) : playPcm(e.data));
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') return onMessage(JSON.parse(e.data));
+    // The first byte says what the frame is (see server/app.js): 1 the translation, 2 their own voice.
+    const tag = new Uint8Array(e.data, 0, 1)[0];
+    if (tag === 1) playPcm(e.data.slice(1));
+    else if (tag === 2) playOriginal(e.data.slice(1));
+  };
   ws.onclose = (e) => {
     note({ type: 'socket_closed', code: e.code });
     if (e.code >= 4000) {
@@ -359,6 +366,43 @@ function unlockSound() {
 
 function updateSoundButton() {
   $('sound').hidden = playContext?.state === 'running';
+}
+
+// ── Their own voice, underneath ──────────────────────────────────────────────
+//
+// The speaker's voice as they say it, 16 kHz, played quietly and at once, so the
+// listener knows someone is talking and waits for the translation instead of
+// speaking over it. It runs on its own clock because it is live, where the
+// translation arrives a moment later in whole sentences.
+
+let backgroundGain = null;
+let backgroundAt = 0;
+let speakingTimer = null;
+
+function playOriginal(buffer) {
+  if (!playContext || playContext.state !== 'running') return;
+  audioStats.backgroundChunks = (audioStats.backgroundChunks || 0) + 1;
+  if (!backgroundGain) {
+    backgroundGain = playContext.createGain();
+    backgroundGain.connect(playContext.destination);
+  }
+  backgroundGain.gain.value = Number($('bg').value) / 100;
+  const samples = new Int16Array(buffer.slice(0, buffer.byteLength - (buffer.byteLength % 2)));
+  if (!samples.length) return;
+  const audio = playContext.createBuffer(1, samples.length, 16000);
+  const channel = audio.getChannelData(0);
+  for (let i = 0; i < samples.length; i += 1) channel[i] = samples[i] / 0x8000;
+  const source = playContext.createBufferSource();
+  source.buffer = audio;
+  source.connect(backgroundGain);
+  // A small head start absorbs network jitter; if playback has fallen behind, it
+  // restarts from now rather than catching up with old speech.
+  if (backgroundAt < playContext.currentTime) backgroundAt = playContext.currentTime + 0.08;
+  source.start(backgroundAt);
+  backgroundAt += audio.duration;
+  $('speaking').hidden = false;
+  clearTimeout(speakingTimer);
+  speakingTimer = setTimeout(() => { $('speaking').hidden = true; }, 900);
 }
 
 // ── The other person's voice ─────────────────────────────────────────────────

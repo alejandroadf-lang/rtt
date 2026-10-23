@@ -710,3 +710,46 @@ test('a failed translation and a failed voice are both in the diagnostics with t
   guest.ws.close();
   stop(app.server);
 });
+
+// ── their own voice, quietly underneath ──────────────────────────────────────
+
+test('the speaker\'s own voice reaches the other person while they speak, tagged apart from the translation, and silence is not relayed', async () => {
+  const sent = [];
+  const said = {};
+  const app = createApp({
+    env: ENV,
+    translator: { translate: async ({ text }) => text },
+    listen: async ({ language, onCommitted }) => { said[language] = onCommitted; return { send: (d) => sent.push(d), close() {} }; },
+    speak: async (a, onAudio) => onAudio(Buffer.from([9, 9, 9, 9])),
+  });
+  const base = await start(app.server);
+  const made = await newRoom(base, ['es', 'es'], ['ar', 'ar']);
+  const host = await open(base, made.roomId, made.hostToken);
+  const guest = await open(base, made.roomId, made.guestToken);
+  await until(() => host.messages.some((m) => m.type === 'partner'));
+
+  const loud = Buffer.alloc(3200);
+  for (let i = 0; i < 1600; i += 1) loud.writeInt16LE(i % 2 ? 8000 : -8000, i * 2);
+  host.ws.send(Buffer.alloc(3200)); // silence: not relayed
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(guest.audio.length, 0, 'silence is not relayed');
+  host.ws.send(loud);
+  await until(() => guest.audio.length === 1);
+  assert.equal(guest.audio[0][0], 2, 'tagged as the speaker\'s own voice');
+  assert.equal(Buffer.compare(guest.audio[0].subarray(1), loud), 0, 'the same audio, unchanged');
+  assert.equal(host.audio.length, 0, 'the speaker does not hear themselves');
+  assert.equal(sent.length, 2, 'and it still goes to speech-to-text');
+
+  // Half a second of hang-over keeps a short pause inside a sentence from flickering.
+  host.ws.send(Buffer.alloc(3200));
+  await until(() => guest.audio.length === 2);
+  assert.equal(guest.audio[1][0], 2);
+
+  // The translation arrives separately, tagged 1.
+  said.es('hola');
+  await until(() => guest.audio.some((a) => a[0] === 1));
+  assert.deepEqual([...guest.audio.find((a) => a[0] === 1).subarray(1)], [9, 9, 9, 9]);
+  host.ws.close();
+  guest.ws.close();
+  stop(app.server);
+});
