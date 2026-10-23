@@ -34,9 +34,10 @@ export function describeStatus(env) {
   return { ready: !missing.length, missing, languages: LANGUAGES, voiceLanguages: Object.keys(LANGUAGES).filter((c) => hasVoice(c, env)) };
 }
 
-export function createApp({ env = process.env, translator, listen, speak }) {
+export function createApp({ env = process.env, translator, listen, speak, check }) {
   const maxSeconds = (Number(env.ROOM_MAX_MINUTES) || 60) * 60;
 
+  const checks = {};
   const sockets = new Map(); // seat object -> { transcriber }
   const sendTo = (room, seatName, message) => {
     const ws = room.seats[seatName].socket;
@@ -77,7 +78,16 @@ export function createApp({ env = process.env, translator, listen, speak }) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     try {
-      if (req.method === 'GET' && url.pathname === '/api/status') return json(res, 200, describeStatus(env));
+      if (req.method === 'GET' && url.pathname === '/api/status') {
+        const status = describeStatus(env);
+        // ?check=1 also asks each provider whether its key works. Cached for a minute:
+        // the page is public, and it must not be a way to hammer someone else's API.
+        if (url.searchParams.get('check') && status.ready && check) {
+          if (!checks.at || Date.now() - checks.at > 60_000) Object.assign(checks, { at: Date.now(), value: await check() });
+          status.checks = checks.value;
+        }
+        return json(res, 200, status);
+      }
 
       if (req.method === 'POST' && url.pathname === '/api/rooms') {
         const status = describeStatus(env);

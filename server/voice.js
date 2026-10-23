@@ -113,3 +113,23 @@ export async function speak({ text, language, voiceId }, onAudio, config = voice
     if (value?.length) onAudio(Buffer.from(value));
   }
 }
+
+/**
+ * Asks ElevenLabs whether the configured key and region are accepted, for the
+ * status page. Never throws: the answer is what the page shows. A restricted key
+ * may be refused this particular read while still allowed to transcribe and speak,
+ * so a refusal is reported as what ElevenLabs said, with the likely causes, rather
+ * than as a verdict.
+ */
+export async function checkElevenLabs(config = voiceConfig()) {
+  try {
+    await getClient(config).user.get();
+    return { ok: true, detail: `ElevenLabs accepted the key${config.environment ? ` on ${config.environment}` : ''}.` };
+  } catch (err) {
+    const status = err?.statusCode ? ` (${err.statusCode})` : '';
+    return {
+      ok: false,
+      detail: `ElevenLabs refused the key${status}: ${String(err?.message || err).slice(0, 200)}. Causes, most likely first: a workspace address containing "residency" needs ELEVENLABS_REGION set to eu, in, sg or us; the key was copied wrongly; a restricted key lacks permission for this check even though speech may still work.`,
+    };
+  }
+}

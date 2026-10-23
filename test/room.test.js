@@ -417,3 +417,20 @@ test('a workspace in a data-residency region gets its own API host, and a typo i
   assert.equal(voiceConfig({ ELEVENLABS_REGION: 'sg' }).environment, 'https://api.sg.residency.elevenlabs.io');
   assert.throws(() => voiceConfig({ ELEVENLABS_REGION: 'xx' }), /"xx" is not one of: eu, in, sg, us/);
 });
+
+test('the status page can ask each provider whether its key works, and does not ask on every visit', async () => {
+  let asked = 0;
+  const app = createApp({
+    env: ENV, translator: {}, listen: async () => ({}), speak: async () => {},
+    check: async () => { asked += 1; return { elevenlabs: { ok: false, detail: 'refused' }, anthropic: { ok: true, detail: 'fine' } }; },
+  });
+  const base = await start(app.server);
+  const plain = await (await fetch(`${base}/api/status`)).json();
+  assert.equal(plain.checks, undefined, 'the plain status does not call out');
+  const first = await (await fetch(`${base}/api/status?check=1`)).json();
+  await fetch(`${base}/api/status?check=1`);
+  assert.equal(first.checks.elevenlabs.ok, false);
+  assert.equal(first.checks.anthropic.detail, 'fine');
+  assert.equal(asked, 1, 'a second visit inside a minute reuses the answer');
+  stop(app.server);
+});

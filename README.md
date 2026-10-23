@@ -41,3 +41,7 @@ Speech-to-text is billed per hour of audio sent, text-to-speech per character, t
 ## Tests
 
 `npm test`: the room end to end with fakes (who hears what, in order, and what is said when translation or speech fails), document retrieval, access, the WebSocket upgrade, and the static server.
+
+## Checking a deployment
+
+Open `/api/status` on your URL: `ready: true` means both keys are set. `/api/status?check=1` also asks ElevenLabs and Anthropic whether each key is accepted, and says why not (a wrong region is the usual cause for a workspace address containing "residency"; set `ELEVENLABS_REGION`).
