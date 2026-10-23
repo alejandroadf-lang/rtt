@@ -12,7 +12,7 @@
 // Kept this thin on purpose, and behind two functions, so pipeline.js is tested
 // without a network and a change of provider touches this file only.
 
-import { ElevenLabsClient, AudioFormat, CommitStrategy, RealtimeEvents } from '@elevenlabs/elevenlabs-js';
+import { ElevenLabsClient, ElevenLabsEnvironment, AudioFormat, CommitStrategy, RealtimeEvents } from '@elevenlabs/elevenlabs-js';
 
 export const SPEECH_FORMAT = 'pcm_24000';
 export const SPEECH_SAMPLE_RATE = 24000;
@@ -22,9 +22,22 @@ export const MIC_SAMPLE_RATE = 16000;
 // works, not a recommendation. Each person should have a voice that fits them.
 const DEFAULT_VOICE = 'JBFqnCBsd6RMkjVDRZzb';
 
+// A key belongs to the region its workspace was created in: a workspace opened at
+// eu.residency.elevenlabs.io has keys that the default api.elevenlabs.io rejects as
+// invalid. ELEVENLABS_REGION picks the matching API host.
+const REGIONS = {
+  eu: ElevenLabsEnvironment.ProductionEu,
+  in: ElevenLabsEnvironment.ProductionIndia,
+  sg: ElevenLabsEnvironment.ProductionSingapore,
+  us: ElevenLabsEnvironment.ProductionUs,
+};
+
 export function voiceConfig(env = process.env) {
+  const region = (env.ELEVENLABS_REGION || '').trim().toLowerCase();
+  if (region && !REGIONS[region]) throw new Error(`ELEVENLABS_REGION "${region}" is not one of: ${Object.keys(REGIONS).join(', ')} (leave it empty for the default api.elevenlabs.io).`);
   return {
     apiKey: (env.ELEVENLABS_API_KEY || '').trim(),
+    environment: REGIONS[region],
     voiceId: (env.ELEVENLABS_VOICE_ID || '').trim() || DEFAULT_VOICE,
     ttsModel: (env.ELEVENLABS_TTS_MODEL || '').trim() || 'eleven_flash_v2_5',
     sttModel: (env.ELEVENLABS_STT_MODEL || '').trim() || 'scribe_v2_realtime',
@@ -32,7 +45,7 @@ export function voiceConfig(env = process.env) {
 }
 
 let client = null;
-const getClient = (apiKey) => (client ??= new ElevenLabsClient({ apiKey }));
+const getClient = ({ apiKey, environment }) => (client ??= new ElevenLabsClient({ apiKey, ...(environment ? { environment } : {}) }));
 
 /**
  * Opens a transcription session for one person. Resolves to { send, close }.
@@ -41,7 +54,7 @@ const getClient = (apiKey) => (client ??= new ElevenLabsClient({ apiKey }));
  * provider's own (quota, auth, rate limit), reach `onError` as a readable Error.
  */
 export async function listen({ language, keyterms = [], onPartial, onCommitted, onError }, config = voiceConfig()) {
-  const connection = await getClient(config.apiKey).speechToText.realtime.connect({
+  const connection = await getClient(config).speechToText.realtime.connect({
     modelId: config.sttModel,
     audioFormat: AudioFormat.PCM_16000,
     sampleRate: MIC_SAMPLE_RATE,
@@ -87,7 +100,7 @@ export async function listen({ language, keyterms = [], onPartial, onCommitted, 
  * as it arrives, and resolves when the sentence is finished.
  */
 export async function speak({ text, language, voiceId }, onAudio, config = voiceConfig()) {
-  const stream = await getClient(config.apiKey).textToSpeech.stream(voiceId || config.voiceId, {
+  const stream = await getClient(config).textToSpeech.stream(voiceId || config.voiceId, {
     text,
     modelId: config.ttsModel,
     languageCode: language,

@@ -409,3 +409,11 @@ test('a language can be read without a voice, and the voice list can be widened 
   assert.ok('th' in status.languages && !status.voiceLanguages.includes('th'));
   assert.ok(status.voiceLanguages.includes('en'));
 });
+
+test('a workspace in a data-residency region gets its own API host, and a typo is named', async () => {
+  const { voiceConfig } = await import('../server/voice.js');
+  assert.equal(voiceConfig({}).environment, undefined, 'default: api.elevenlabs.io');
+  assert.equal(voiceConfig({ ELEVENLABS_REGION: 'EU' }).environment, 'https://api.eu.residency.elevenlabs.io');
+  assert.equal(voiceConfig({ ELEVENLABS_REGION: 'sg' }).environment, 'https://api.sg.residency.elevenlabs.io');
+  assert.throws(() => voiceConfig({ ELEVENLABS_REGION: 'xx' }), /"xx" is not one of: eu, in, sg, us/);
+});
