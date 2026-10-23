@@ -11,7 +11,7 @@ import { createTranslator, buildSystem } from '../server/translate.js';
 import { addDocument, retrieve, keyterms, chunk } from '../server/docs.js';
 import { createRoom, seatFor, setLanguages, hasVoice, __clearRoomsForTests } from '../server/rooms.js';
 
-const ENV = { ELEVENLABS_API_KEY: 'x', ANTHROPIC_API_KEY: 'y' };
+const ENV = { ELEVENLABS_API_KEY: 'x', ANTHROPIC_API_KEY: 'y', ROOM_ACCESS_CODE: 'none' };
 
 beforeEach(() => __clearRoomsForTests());
 
@@ -432,5 +432,63 @@ test('the status page can ask each provider whether its key works, and does not 
   assert.equal(first.checks.elevenlabs.ok, false);
   assert.equal(first.checks.anthropic.detail, 'fine');
   assert.equal(asked, 1, 'a second visit inside a minute reuses the answer');
+  stop(app.server);
+});
+
+// ── the access code ──────────────────────────────────────────────────────────
+
+const guarded = (code) => createApp({ env: { ...ENV, ROOM_ACCESS_CODE: code }, translator: {}, listen: async () => ({}), speak: async () => {} });
+const create = (base, code, headers = {}) => fetch(`${base}/api/rooms`, { method: 'POST', body: '{}', headers: { ...(code === undefined ? {} : { 'x-access-code': code }), ...headers } });
+
+test('creating a room needs the access code; joining through a link does not', async () => {
+  const app = guarded('open sesame');
+  const base = await start(app.server);
+  const none = await create(base);
+  assert.equal(none.status, 401);
+  assert.match((await none.json()).error, /needs an access code/);
+  const wrong = await create(base, 'nope');
+  assert.equal(wrong.status, 401);
+  assert.match((await wrong.json()).error, /Wrong access code/);
+  const right = await create(base, 'open sesame');
+  assert.equal(right.status, 201);
+  const made = await right.json();
+  // A guest holding only a link is not asked for the code.
+  const joined = await fetch(`${base}/api/rooms/${made.roomId}`, { headers: { 'x-room-token': made.guestToken } });
+  assert.equal(joined.status, 200);
+  stop(app.server);
+});
+
+test('the code is never shown by the status page, which only says whether one is needed', async () => {
+  const app = guarded('open sesame');
+  const base = await start(app.server);
+  const body = await (await fetch(`${base}/api/status`)).json();
+  assert.equal(body.needsCode, true);
+  assert.equal(JSON.stringify(body).includes('open sesame'), false);
+  stop(app.server);
+});
+
+test('"none" lets anyone create rooms, and an unset code refuses them by name', async () => {
+  const open = guarded('none');
+  const base = await start(open.server);
+  assert.equal((await create(base)).status, 201);
+  assert.equal((await (await fetch(`${base}/api/status`)).json()).needsCode, false);
+  stop(open.server);
+
+  const unset = createApp({ env: { ELEVENLABS_API_KEY: 'x', ANTHROPIC_API_KEY: 'y' }, translator: {}, listen: async () => ({}), speak: async () => {} });
+  const base2 = await start(unset.server);
+  const refused = await create(base2);
+  assert.equal(refused.status, 503);
+  assert.match((await refused.json()).error, /ROOM_ACCESS_CODE/);
+  stop(unset.server);
+});
+
+test('guessing the code is stopped after a few wrong tries, per client', async () => {
+  const app = guarded('open sesame');
+  const base = await start(app.server);
+  const as = (ip) => ({ 'x-forwarded-for': `1.1.1.1, ${ip}` });
+  for (let i = 0; i < 8; i += 1) assert.equal((await create(base, `guess${i}`, as('9.9.9.9'))).status, 401);
+  const blocked = await create(base, 'open sesame', as('9.9.9.9'));
+  assert.equal(blocked.status, 429, 'even the right code waits out the window');
+  assert.equal((await create(base, 'open sesame', as('8.8.8.8'))).status, 201, 'another client is not affected');
   stop(app.server);
 });

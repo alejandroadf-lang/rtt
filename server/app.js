@@ -8,6 +8,7 @@
 // without a network or a key.
 
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,13 +32,29 @@ export function describeStatus(env) {
   const missing = [];
   if (!(env.ELEVENLABS_API_KEY || '').trim()) missing.push('ELEVENLABS_API_KEY (speech-to-text and the translated voice)');
   if (!(env.ANTHROPIC_API_KEY || '').trim()) missing.push('ANTHROPIC_API_KEY (the translation itself)');
-  return { ready: !missing.length, missing, languages: LANGUAGES, voiceLanguages: Object.keys(LANGUAGES).filter((c) => hasVoice(c, env)) };
+  // Creating a room spends the owner's ElevenLabs and Anthropic credit, so it is
+  // closed unless the owner chose how: a code, or "none" to let anyone. Unset is
+  // refused rather than treated as open, so a forgotten variable on the server cannot
+  // quietly leave the door open.
+  const code = (env.ROOM_ACCESS_CODE || '').trim();
+  if (!code) missing.push('ROOM_ACCESS_CODE (any word you choose; or "none" to let anyone create rooms)');
+  return { ready: !missing.length, missing, needsCode: Boolean(code) && code.toLowerCase() !== 'none', languages: LANGUAGES, voiceLanguages: Object.keys(LANGUAGES).filter((c) => hasVoice(c, env)) };
 }
+
+const sha = (text) => crypto.createHash('sha256').update(String(text)).digest();
+
+// Wrong guesses per client, so a code cannot be found by trying them all: 8 misses
+// in 10 minutes and that client waits out the window. The address is the last
+// X-Forwarded-For entry, the one the hosting proxy itself appended; earlier entries
+// are whatever the client claimed.
+const MISS_LIMIT = 8;
+const MISS_WINDOW_MS = 10 * 60_000;
 
 export function createApp({ env = process.env, translator, listen, speak, check }) {
   const maxSeconds = (Number(env.ROOM_MAX_MINUTES) || 60) * 60;
 
   const checks = {};
+  const misses = new Map(); // client -> [timestamps of wrong codes]
   const sockets = new Map(); // seat object -> { transcriber }
   const sendTo = (room, seatName, message) => {
     const ws = room.seats[seatName].socket;
@@ -92,6 +109,19 @@ export function createApp({ env = process.env, translator, listen, speak, check 
       if (req.method === 'POST' && url.pathname === '/api/rooms') {
         const status = describeStatus(env);
         if (!status.ready) return json(res, 503, { error: `Rooms cannot start: set ${status.missing.join(' and ')} on the server.` });
+        if (status.needsCode) {
+          const forwarded = String(req.headers['x-forwarded-for'] || '').split(',').pop().trim();
+          const client = forwarded || req.socket.remoteAddress || 'unknown';
+          const recent = (misses.get(client) || []).filter((t) => Date.now() - t < MISS_WINDOW_MS);
+          if (recent.length >= MISS_LIMIT) return json(res, 429, { error: 'Too many wrong access codes. Wait ten minutes and try again.' });
+          // Hashed first so the comparison is over equal-length values and takes the
+          // same time whichever character differs.
+          const given = sha(req.headers['x-access-code'] || '');
+          if (!crypto.timingSafeEqual(given, sha(env.ROOM_ACCESS_CODE.trim()))) {
+            misses.set(client, [...recent, Date.now()]);
+            return json(res, 401, { error: req.headers['x-access-code'] ? 'Wrong access code.' : 'This server needs an access code to create a room.' });
+          }
+        }
         const room = createRoom();
         return json(res, 201, { roomId: room.id, hostToken: room.seats.host.token, guestToken: room.seats.guest.token });
       }

@@ -31,10 +31,11 @@ async function showCreate() {
     $('create').append(msg);
     $('start').disabled = true;
   }
+  $('codeBox').hidden = !status.needsCode;
   $('start').addEventListener('click', async () => {
     $('start').disabled = true;
     try {
-      const made = await api('/api/rooms', { method: 'POST', body: '{}' }, '');
+      const made = await api('/api/rooms', { method: 'POST', body: '{}', headers: { 'x-access-code': $('code').value } }, '');
       const base = `${location.origin}/r/${made.roomId}`;
       const mine = `${base}#${made.hostToken}`;
       const theirs = `${base}#${made.guestToken}`;

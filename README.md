@@ -11,11 +11,15 @@ mic → ElevenLabs Scribe v2 Realtime → sentence → translate (Claude, with t
 
 ```
 npm install
-cp .env.example .env   # set ELEVENLABS_API_KEY and ANTHROPIC_API_KEY, never commit them
+cp .env.example .env   # set ELEVENLABS_API_KEY, ANTHROPIC_API_KEY and ROOM_ACCESS_CODE; never commit them
 node --env-file=.env server/index.js
 ```
 
 Open `http://localhost:3000`, create the room, and send the second link to the other person. Each of you then chooses **I speak** and **I hear** (usually the same language; they can differ, and either can be changed mid-conversation). The page shows what the other person chose. Use headphones: with speakers the microphone hears the other person's translated voice and translates it again.
+
+## Who can create rooms
+
+Creating a room spends your ElevenLabs and Anthropic credit, so it needs `ROOM_ACCESS_CODE` (a word you choose, asked for on the create page; `none` lets anyone). With it unset, rooms are refused and the page says which variable to set. People you invite join through the link you send them and never need the code. Eight wrong guesses from one client lock that client out for ten minutes.
 
 ## Languages
 
