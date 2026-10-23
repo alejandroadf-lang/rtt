@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interpreter Room</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #f6f3ee; --surface: #fffdf9; --ink: #1d2433; --muted: #5d6677; --line: #ddd6ca;
+    --accent: #0b5d63; --accent-ink: #ffffff; --you: #e8f1ee; --them: #f3ece0; --warn: #9a3412;
+    --display: 'Fraunces', Georgia, serif; --body: 'IBM Plex Sans', system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12171f; --surface: #1a212c; --ink: #e8ebf0; --muted: #98a2b3; --line: #2b3442;
+      --accent: #5fc1c7; --accent-ink: #0c1a1c; --you: #1d2f2e; --them: #2a2620; --warn: #fb923c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12171f; --surface: #1a212c; --ink: #e8ebf0; --muted: #98a2b3; --line: #2b3442;
+    --accent: #5fc1c7; --accent-ink: #0c1a1c; --you: #1d2f2e; --them: #2a2620; --warn: #fb923c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 var(--body); }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; display: grid; gap: 20px; }
+  h1 { font: 600 clamp(1.8rem, 5vw, 2.4rem)/1.1 var(--display); margin: 0; text-wrap: balance; }
+  h2 { font: 600 1.1rem var(--display); margin: 0 0 8px; }
+  p { margin: 0; color: var(--muted); max-width: 62ch; }
+  section { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  label { display: block; font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  select, button, input[type=file] { font: inherit; }
+  select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 480px) { .row { grid-template-columns: 1fr; } }
+  button { padding: 10px 16px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); font-weight: 600; cursor: pointer; }
+  button.quiet { background: transparent; color: var(--accent); }
+  button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  button[aria-pressed="true"] { background: var(--warn); border-color: var(--warn); color: #fff; }
+  .links { display: grid; gap: 10px; margin-top: 12px; }
+  .link { padding: 10px; background: var(--bg); border: 1px dashed var(--line); border-radius: 8px; overflow-wrap: anywhere; font-size: .9rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+  #log { display: grid; gap: 10px; min-height: 160px; max-height: 50vh; overflow-y: auto; }
+  .turn { padding: 10px 12px; border-radius: 10px; max-width: 92%; }
+  .turn.you { background: var(--you); justify-self: start; }
+  .turn.them { background: var(--them); justify-self: end; }
+  .turn .small { display: block; font-size: .85rem; color: var(--muted); margin-top: 4px; }
+  .turn .bad { color: var(--warn); }
+  #partial { color: var(--muted); font-style: italic; min-height: 1.5em; }
+  #status { font-size: .9rem; color: var(--muted); }
+  #status.bad { color: var(--warn); }
+  ul { margin: 8px 0 0; padding-left: 20px; color: var(--muted); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Interpreter Room</h1>
+    <p>Each person speaks and hears their own language. The interpreter uses the documents you attach to choose the right words.</p>
+  </header>
+
+  <section id="create" hidden>
+    <h2>Start a conversation</h2>
+    <p>You get two links: one for you, one for the other person. Each of you then chooses what you speak and what you hear.</p>
+    <p style="margin-top:12px"><button id="start">Create room</button></p>
+    <div id="links" class="links" hidden></div>
+  </section>
+
+  <section id="room" hidden>
+    <div class="row">
+      <div><label for="mine">I speak</label><select id="mine"></select></div>
+      <div><label for="hear">I hear</label><select id="hear"></select></div>
+    </div>
+    <p id="theirs" style="margin-top:10px"></p>
+    <div class="bar" style="margin-top:12px">
+      <span id="status" role="status"></span>
+      <button id="mic" aria-pressed="false">Start talking</button>
+    </div>
+    <p id="partial" aria-live="off"></p>
+  </section>
+
+  <section id="transcript" hidden>
+    <h2>Conversation</h2>
+    <div id="log" role="log" aria-live="polite"></div>
+  </section>
+
+  <section id="docs" hidden>
+    <h2>Documents for this conversation</h2>
+    <p>Text files (.txt, .md, .csv, .json, .html). Names, terms and wording in them are used when translating. The other person sees the file names (not the contents) when they open the room.</p>
+    <p style="margin-top:10px"><input id="file" type="file" multiple accept=".txt,.md,.markdown,.csv,.json,.html,.htm" aria-label="Attach documents"></p>
+    <ul id="doclist"></ul>
+  </section>
+</main>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
