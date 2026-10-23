@@ -59,7 +59,7 @@ const getClient = ({ apiKey, environment, client: given }) => given || (client ?
  * said now; `onCommitted(text)` is a finished sentence. Errors, including the
  * provider's own (quota, auth, rate limit), reach `onError` as a readable Error.
  */
-export async function listen({ language, keyterms = [], onPartial, onCommitted, onError }, config = voiceConfig()) {
+export async function listen({ language, keyterms = [], onPartial, onCommitted, onError, onClose }, config = voiceConfig()) {
   const connection = await getClient(config).speechToText.realtime.connect({
     modelId: config.sttModel,
     audioFormat: AudioFormat.PCM_16000,
@@ -89,8 +89,22 @@ export async function listen({ language, keyterms = [], onPartial, onCommitted, 
     connection.on(event, (m) => onError?.(new Error(`${label}${m?.error ? `: ${m.error}` : m?.message ? `: ${m.message}` : ''}`)));
   }
 
+  // ElevenLabs ends a session on its own now and then (idle, time limit, an error).
+  // The caller is told, so it can open a new one instead of finding out by failing.
+  connection.on(RealtimeEvents.CLOSE, () => onClose?.());
+
   return {
-    send: (pcm) => connection.send({ audioBase64: Buffer.from(pcm).toString('base64'), sampleRate: MIC_SAMPLE_RATE }),
+    // The SDK throws when its socket is already closed. Left uncaught inside a
+    // WebSocket message handler that takes the whole server down, so it is a result
+    // here: false means the audio was not sent.
+    send: (pcm) => {
+      try {
+        connection.send({ audioBase64: Buffer.from(pcm).toString('base64'), sampleRate: MIC_SAMPLE_RATE });
+        return true;
+      } catch {
+        return false;
+      }
+    },
     close: () => {
       try {
         connection.close();

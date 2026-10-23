@@ -195,22 +195,41 @@ export function createApp({ env = process.env, translator, listen, speak, check 
     wss.handleUpgrade(req, socket, head, (ws) => attach(ws, room, seatName));
   });
 
+  // Forgets a seat's session BEFORE closing it: the session's close event is how a
+  // drop is noticed, and a close we asked for must not look like one.
+  function dropListener(seat) {
+    const current = sockets.get(seat)?.transcriber;
+    sockets.delete(seat);
+    current?.close();
+  }
+
   // (Re)opens speech-to-text for a seat in the language it speaks now. Used when
   // someone connects and when they change what they speak mid-conversation.
   async function startListening(room, seatName) {
     const seat = room.seats[seatName];
-    sockets.get(seat)?.transcriber?.close();
-    sockets.delete(seat);
+    dropListener(seat);
     const fail = (err) => sendTo(room, seatName, { type: 'error', message: err.message });
+    const mine = {};
     try {
-      const transcriber = await listen({
+      mine.transcriber = await listen({
         language: seat.input,
         keyterms: keyterms(room),
         onPartial: (text) => sendTo(room, seatName, { type: 'partial', text }),
         onCommitted: (text) => runTurn(room, seatName, text),
         onError: fail,
+        // ElevenLabs closed its side. If this is still the seat's current session and the
+        // person is still connected, open a fresh one; at most three times a minute, so a
+        // session that keeps dying is reported instead of retried forever.
+        onClose: () => {
+          if (sockets.get(seat)?.transcriber !== mine.transcriber || seat.socket?.readyState !== 1) return;
+          const now = Date.now();
+          seat.restarts = [...(seat.restarts || []).filter((t) => now - t < 60_000), now];
+          if (seat.restarts.length > 3) return fail(new Error('Speech-to-text keeps disconnecting. Reload the page to try again.'));
+          sendTo(room, seatName, { type: 'status', message: 'Speech-to-text reconnected.' });
+          startListening(room, seatName);
+        },
       });
-      sockets.set(seat, { transcriber });
+      sockets.set(seat, { transcriber: mine.transcriber });
       return true;
     } catch (err) {
       fail(new Error(`Could not start listening: ${err.message}`));
@@ -245,12 +264,17 @@ export function createApp({ env = process.env, translator, listen, speak, check 
         fail(new Error(`This room has used its ${maxSeconds / 60} minutes of speech. Start a new room to keep talking (ROOM_MAX_MINUTES sets the limit).`));
         return ws.close(4002, 'Room time used');
       }
-      sockets.get(seat)?.transcriber.send(data);
+      // Not sent means ElevenLabs' side is closed; the close handler is already
+      // opening a new session, and this chunk of audio is simply dropped.
+      try {
+        sockets.get(seat)?.transcriber.send(data);
+      } catch {
+        // An adapter that throws must not take the server down with it.
+      }
     });
     ws.on('close', () => {
       if (seat.socket !== ws) return;
-      sockets.get(seat)?.transcriber?.close();
-      sockets.delete(seat);
+      dropListener(seat);
       seat.socket = null;
       sendTo(room, partnerName, { type: 'partner', here: false });
     });

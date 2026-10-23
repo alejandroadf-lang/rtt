@@ -508,3 +508,58 @@ test('the ElevenLabs check always says which address it asked, whether or not th
   assert.equal(ok.ok, true);
   assert.match(ok.detail, /accepted the key on https:\/\/api\.eu\.residency/);
 });
+
+// ── speech-to-text going away mid-conversation ───────────────────────────────
+
+test('when ElevenLabs closes its session the app opens a new one, tells the person, and keeps the connection', async () => {
+  const sessions = [];
+  const app = createApp({
+    env: ENV,
+    translator: {},
+    listen: async (args) => { const s = { ...args, closed: false, send: () => { throw new Error('WebSocket is not connected'); }, close() { this.closed = true; } }; sessions.push(s); return s; },
+    speak: async () => {},
+  });
+  const base = await start(app.server);
+  const made = await newRoom(base);
+  const host = await open(base, made.roomId, made.hostToken);
+  await until(() => sessions.length === 1);
+
+  // Audio into a dead session must not crash anything (the send throws above).
+  host.ws.send(Buffer.alloc(3200));
+  sessions[0].onClose();
+  await until(() => sessions.length === 2);
+  await until(() => host.messages.some((m) => m.type === 'status' && /reconnected/.test(m.message)));
+  assert.equal(host.ws.readyState, 1, 'the browser connection stayed open');
+  host.ws.send(Buffer.alloc(3200));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(host.ws.readyState, 1, 'and so did the server');
+
+  // A session that keeps dying is reported instead of retried forever.
+  sessions[1].onClose();
+  await until(() => sessions.length === 3);
+  sessions[2].onClose();
+  await until(() => sessions.length === 4);
+  sessions[3].onClose();
+  await until(() => host.messages.some((m) => m.type === 'error' && /keeps disconnecting/.test(m.message)));
+  assert.equal(sessions.length, 4, 'no fifth session was opened');
+  host.ws.close();
+  stop(app.server);
+});
+
+test('closing a session on purpose (changing language) does not look like a drop and is not reopened twice', async () => {
+  const sessions = [];
+  const app = createApp({
+    env: ENV, translator: {}, speak: async () => {},
+    listen: async (args) => { const s = { ...args, send() {}, close() { this.closed = true; args.onClose?.(); } }; sessions.push(s); return s; },
+  });
+  const base = await start(app.server);
+  const made = await newRoom(base);
+  const host = await open(base, made.roomId, made.hostToken);
+  await until(() => sessions.length === 1);
+  await fetch(`${base}/api/rooms/${made.roomId}/me`, { method: 'PUT', headers: { 'x-room-token': made.hostToken }, body: JSON.stringify({ input: 'de', output: 'en' }) });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(sessions.length, 2, 'exactly one new session for the language change');
+  assert.equal(sessions[1].language, 'de');
+  host.ws.close();
+  stop(app.server);
+});

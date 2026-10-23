@@ -147,13 +147,28 @@ function renderDocs(names) {
   $('doclist').replaceChildren(...names.map((n) => Object.assign(document.createElement('li'), { textContent: n })));
 }
 
+// A phone changes network, locks, or the server restarts: the socket drops without
+// anyone doing anything. Reconnect quietly a few times before asking for a reload.
+// Codes 4000 and up are the server saying "stop" on purpose (another tab, time used).
+let attempts = 0;
+
 function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?room=${encodeURIComponent(roomId)}&token=${encodeURIComponent(token)}`);
   ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { attempts = 0; };
   ws.onmessage = (e) => (typeof e.data === 'string' ? onMessage(JSON.parse(e.data)) : playPcm(e.data));
   ws.onclose = (e) => {
-    stopMic();
-    setStatus(e.code === 4000 ? 'This room is open in another tab.' : e.code === 4002 ? 'This room has used its time. Start a new one.' : 'Disconnected. Reload to rejoin.', true);
+    if (e.code >= 4000) {
+      stopMic();
+      setStatus(e.code === 4000 ? 'This room is open in another tab.' : e.code === 4002 ? 'This room has used its time. Start a new one.' : 'The room closed the connection.', true);
+    } else if (attempts < 5) {
+      attempts += 1;
+      setStatus(`Connection lost. Reconnecting (${attempts} of 5)...`, true);
+      setTimeout(connect, 1000 * attempts);
+    } else {
+      stopMic();
+      setStatus('Disconnected. Reload to rejoin.', true);
+    }
   };
 }
 
