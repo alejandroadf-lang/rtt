@@ -45,7 +45,8 @@ export function voiceConfig(env = process.env) {
 }
 
 let client = null;
-const getClient = ({ apiKey, environment }) => (client ??= new ElevenLabsClient({ apiKey, ...(environment ? { environment } : {}) }));
+// `config.client` lets a test pass a stand-in instead of the network.
+const getClient = ({ apiKey, environment, client: given }) => given || (client ??= new ElevenLabsClient({ apiKey, ...(environment ? { environment } : {}) }));
 
 /**
  * Opens a transcription session for one person. Resolves to { send, close }.
@@ -122,14 +123,20 @@ export async function speak({ text, language, voiceId }, onAudio, config = voice
  * than as a verdict.
  */
 export async function checkElevenLabs(config = voiceConfig()) {
+  // Always says which address was asked, success or not: "refused the key" is not
+  // actionable until you can see whether the region setting reached the call.
+  const host = config.environment || 'https://api.elevenlabs.io (default; ELEVENLABS_REGION is empty)';
   try {
     await getClient(config).user.get();
-    return { ok: true, detail: `ElevenLabs accepted the key${config.environment ? ` on ${config.environment}` : ''}.` };
+    return { ok: true, host, detail: `ElevenLabs accepted the key on ${host}.` };
   } catch (err) {
     const status = err?.statusCode ? ` (${err.statusCode})` : '';
+    const said = String(err?.message || err).replace(/\s+/g, ' ').slice(0, 500);
     return {
       ok: false,
-      detail: `ElevenLabs refused the key${status}: ${String(err?.message || err).slice(0, 200)}. Causes, most likely first: a workspace address containing "residency" needs ELEVENLABS_REGION set to eu, in, sg or us; the key was copied wrongly; a restricted key lacks permission for this check even though speech may still work.`,
+      host,
+      detail: `ElevenLabs refused the key${status} on ${host}: ${said}`,
+      causes: 'Most likely first: the region must match the workspace address (eu, in, sg or us, set as ELEVENLABS_REGION on this service, then redeployed); the key was copied wrongly; a restricted key lacks permission for this check even though speech may still work.',
     };
   }
 }

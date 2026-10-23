@@ -492,3 +492,18 @@ test('guessing the code is stopped after a few wrong tries, per client', async (
   assert.equal((await create(base, 'open sesame', as('8.8.8.8'))).status, 201, 'another client is not affected');
   stop(app.server);
 });
+
+test('the ElevenLabs check always says which address it asked, whether or not the key was accepted', async () => {
+  const { checkElevenLabs } = await import('../server/voice.js');
+  const refusing = { user: { get: async () => { throw Object.assign(new Error('Invalid API key: this key is for a data residency stack'), { statusCode: 401 }); } } };
+  const accepting = { user: { get: async () => ({}) } };
+  const eu = await checkElevenLabs({ environment: 'https://api.eu.residency.elevenlabs.io', client: refusing });
+  assert.equal(eu.ok, false);
+  assert.match(eu.detail, /refused the key \(401\) on https:\/\/api\.eu\.residency\.elevenlabs\.io: Invalid API key/);
+  assert.match(eu.causes, /ELEVENLABS_REGION/);
+  const def = await checkElevenLabs({ client: refusing });
+  assert.match(def.detail, /on https:\/\/api\.elevenlabs\.io \(default; ELEVENLABS_REGION is empty\)/);
+  const ok = await checkElevenLabs({ environment: 'https://api.eu.residency.elevenlabs.io', client: accepting });
+  assert.equal(ok.ok, true);
+  assert.match(ok.detail, /accepted the key on https:\/\/api\.eu\.residency/);
+});
