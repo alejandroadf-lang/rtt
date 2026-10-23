@@ -410,12 +410,13 @@ test('a language can be read without a voice, and the voice list can be widened 
   assert.ok(status.voiceLanguages.includes('en'));
 });
 
-test('a workspace in a data-residency region gets its own API host, and a typo is named', async () => {
+test('the EU region is built in, can be overridden, and "default" selects the standard address', async () => {
   const { voiceConfig } = await import('../server/voice.js');
-  assert.equal(voiceConfig({}).environment, undefined, 'default: api.elevenlabs.io');
-  assert.equal(voiceConfig({ ELEVENLABS_REGION: 'EU' }).environment, 'https://api.eu.residency.elevenlabs.io');
+  assert.equal(voiceConfig({}).environment, 'https://api.eu.residency.elevenlabs.io', 'no variable needed for this deployment');
   assert.equal(voiceConfig({ ELEVENLABS_REGION: 'sg' }).environment, 'https://api.sg.residency.elevenlabs.io');
-  assert.throws(() => voiceConfig({ ELEVENLABS_REGION: 'xx' }), /"xx" is not one of: eu, in, sg, us/);
+  assert.equal(voiceConfig({ ELEVENLABS_REGION: 'EU' }).environment, 'https://api.eu.residency.elevenlabs.io');
+  assert.equal(voiceConfig({ ELEVENLABS_REGION: 'default' }).environment, undefined, 'an ordinary account');
+  assert.throws(() => voiceConfig({ ELEVENLABS_REGION: 'xx' }), /"xx" is not one of: eu, in, sg, us, default/);
 });
 
 test('the status page can ask each provider whether its key works, and does not ask on every visit', async () => {
@@ -502,7 +503,7 @@ test('the ElevenLabs check always says which address it asked, whether or not th
   assert.match(eu.detail, /refused the key \(401\) on https:\/\/api\.eu\.residency\.elevenlabs\.io: Invalid API key/);
   assert.match(eu.causes, /ELEVENLABS_REGION/);
   const def = await checkElevenLabs({ client: refusing });
-  assert.match(def.detail, /on https:\/\/api\.elevenlabs\.io \(default; ELEVENLABS_REGION is empty\)/);
+  assert.match(def.detail, /on https:\/\/api\.elevenlabs\.io \(the standard address/);
   const ok = await checkElevenLabs({ environment: 'https://api.eu.residency.elevenlabs.io', client: accepting });
   assert.equal(ok.ok, true);
   assert.match(ok.detail, /accepted the key on https:\/\/api\.eu\.residency/);

@@ -24,17 +24,22 @@ const DEFAULT_VOICE = 'JBFqnCBsd6RMkjVDRZzb';
 
 // A key belongs to the region its workspace was created in: a workspace opened at
 // eu.residency.elevenlabs.io has keys that the default api.elevenlabs.io rejects as
-// invalid. ELEVENLABS_REGION picks the matching API host.
+// invalid. This deployment's workspace is in the EU, so EU is the built-in default
+// and the Railway variable is not needed. ELEVENLABS_REGION still overrides it
+// (in, sg, us), and "default" selects the standard api.elevenlabs.io for an
+// ordinary account, which is what anyone else deploying this repo will want.
+const DEFAULT_REGION = 'eu';
 const REGIONS = {
   eu: ElevenLabsEnvironment.ProductionEu,
   in: ElevenLabsEnvironment.ProductionIndia,
   sg: ElevenLabsEnvironment.ProductionSingapore,
   us: ElevenLabsEnvironment.ProductionUs,
+  default: undefined,
 };
 
 export function voiceConfig(env = process.env) {
-  const region = (env.ELEVENLABS_REGION || '').trim().toLowerCase();
-  if (region && !REGIONS[region]) throw new Error(`ELEVENLABS_REGION "${region}" is not one of: ${Object.keys(REGIONS).join(', ')} (leave it empty for the default api.elevenlabs.io).`);
+  const region = (env.ELEVENLABS_REGION || '').trim().toLowerCase() || DEFAULT_REGION;
+  if (!(region in REGIONS)) throw new Error(`ELEVENLABS_REGION "${region}" is not one of: ${Object.keys(REGIONS).join(', ')}.`);
   return {
     apiKey: (env.ELEVENLABS_API_KEY || '').trim(),
     environment: REGIONS[region],
@@ -125,7 +130,7 @@ export async function speak({ text, language, voiceId }, onAudio, config = voice
 export async function checkElevenLabs(config = voiceConfig()) {
   // Always says which address was asked, success or not: "refused the key" is not
   // actionable until you can see whether the region setting reached the call.
-  const host = config.environment || 'https://api.elevenlabs.io (default; ELEVENLABS_REGION is empty)';
+  const host = config.environment || 'https://api.elevenlabs.io (the standard address, ELEVENLABS_REGION=default)';
   try {
     await getClient(config).user.get();
     return { ok: true, host, detail: `ElevenLabs accepted the key on ${host}.` };

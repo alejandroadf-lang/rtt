@@ -48,4 +48,4 @@ Speech-to-text is billed per hour of audio sent, text-to-speech per character, t
 
 ## Checking a deployment
 
-Open `/api/status` on your URL: `ready: true` means both keys are set. `/api/status?check=1` also asks ElevenLabs and Anthropic whether each key is accepted, and says why not (a wrong region is the usual cause for a workspace address containing "residency"; set `ELEVENLABS_REGION`).
+Open `/api/status` on your URL: `ready: true` means both keys are set. `/api/status?check=1` also asks ElevenLabs and Anthropic whether each key is accepted, and says why not (a wrong region is the usual cause for a workspace address containing "residency"; `ELEVENLABS_REGION` decides the address; EU is built in, `default` selects the standard api.elevenlabs.io).
