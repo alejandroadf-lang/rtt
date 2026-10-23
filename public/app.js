@@ -23,13 +23,7 @@ else showCreate();
 
 async function showCreate() {
   $('create').hidden = false;
-  const status = await api('/api/status').catch((e) => ({ ready: false, missing: [e.message], languages: {} }));
-  const names = new Intl.DisplayNames([navigator.language || 'en'], { type: 'language' });
-  for (const sel of [$('mine'), $('theirs')]) {
-    for (const code of Object.keys(status.languages)) sel.add(new Option(`${names.of(code) || status.languages[code]} (${code})`, code));
-  }
-  $('mine').value = (navigator.language || 'en').slice(0, 2) in status.languages ? (navigator.language || 'en').slice(0, 2) : 'en';
-  $('theirs').value = $('mine').value === 'es' ? 'en' : 'es';
+  const status = await api('/api/status').catch((e) => ({ ready: false, missing: [e.message] }));
   if (!status.ready) {
     const msg = document.createElement('p');
     msg.textContent = `Rooms cannot start yet: the server needs ${status.missing.join(' and ')}.`;
@@ -40,7 +34,7 @@ async function showCreate() {
   $('start').addEventListener('click', async () => {
     $('start').disabled = true;
     try {
-      const made = await api('/api/rooms', { method: 'POST', body: JSON.stringify({ hostLanguage: $('mine').value, guestLanguage: $('theirs').value }) }, '');
+      const made = await api('/api/rooms', { method: 'POST', body: '{}' }, '');
       const base = `${location.origin}/r/${made.roomId}`;
       const mine = `${base}#${made.hostToken}`;
       const theirs = `${base}#${made.guestToken}`;
@@ -83,21 +77,35 @@ function setStatus(text, bad = false) {
 
 async function enterRoom() {
   let info;
+  let status;
   try {
-    info = await api(`/api/rooms/${encodeURIComponent(roomId)}`);
+    [info, status] = await Promise.all([api(`/api/rooms/${encodeURIComponent(roomId)}`), api('/api/status')]);
   } catch (err) {
     $('create').hidden = true;
-    setStatus(err.message, true);
     $('room').hidden = false;
     $('mic').hidden = true;
+    $('mine').parentElement.parentElement.hidden = true;
+    setStatus(err.message, true);
     return;
   }
-  const names = new Intl.DisplayNames(['en'], { type: 'language' });
   $('room').hidden = $('transcript').hidden = $('docs').hidden = false;
-  $('who').textContent = `You speak ${names.of(info.yourLanguage)}; they hear ${names.of(info.theirLanguage)}.`;
+  fillLanguages(status.languages, status.voiceLanguages);
+  // First visit: what you speak is your browser's language, and you hear the same.
+  // Coming back (or reloading) keeps what the room already has for you.
+  const guess = (navigator.language || 'en').slice(0, 2);
+  $('mine').value = info.yourInput || (guess in status.languages ? guess : 'en');
+  $('hear').value = info.yourOutput || $('mine').value;
+  showTheirs(info.theirInput, info.theirOutput);
   renderDocs(info.documents);
   setStatus(info.partnerHere ? 'They are here.' : 'Waiting for them to open their link.');
+
+  // Both are saved before the socket opens, because speech-to-text starts in the
+  // language you speak. A later change is saved the same way and the server
+  // restarts listening itself.
+  await saveLanguages();
   connect();
+  $('mine').addEventListener('change', saveLanguages);
+  $('hear').addEventListener('change', saveLanguages);
 
   $('file').addEventListener('change', async (e) => {
     for (const file of e.target.files) {
@@ -111,6 +119,27 @@ async function enterRoom() {
     e.target.value = '';
   });
   $('mic').addEventListener('click', () => (micStream ? stopMic() : startMic()));
+}
+
+const names = new Intl.DisplayNames(['en'], { type: 'language' });
+const label = (code) => (code ? names.of(code) : 'not chosen yet');
+
+function fillLanguages(languages, voiceLanguages) {
+  $('mine').replaceChildren(...Object.keys(languages).map((code) => new Option(`${label(code)} (${code})`, code)));
+  // A language without a spoken voice can still be read: it is offered, and marked.
+  $('hear').replaceChildren(...Object.keys(languages).map((code) => new Option(`${label(code)} (${code})${voiceLanguages.includes(code) ? '' : ' - text only'}`, code)));
+}
+
+async function saveLanguages() {
+  try {
+    await api(`/api/rooms/${encodeURIComponent(roomId)}/me`, { method: 'PUT', body: JSON.stringify({ input: $('mine').value, output: $('hear').value }) });
+  } catch (err) {
+    setStatus(err.message, true);
+  }
+}
+
+function showTheirs(input, output) {
+  $('theirs').textContent = input ? `They speak ${label(input)} and hear ${label(output)}.` : 'They have not chosen their languages yet.';
 }
 
 function renderDocs(names) {
@@ -130,6 +159,8 @@ function connect() {
 function onMessage(m) {
   if (m.type === 'ready') setStatus(m.partnerHere ? 'They are here.' : 'Waiting for them to open their link.');
   else if (m.type === 'partner') setStatus(m.here ? 'They are here.' : 'They left.');
+  else if (m.type === 'partner_languages') showTheirs(m.input, m.output);
+  else if (m.type === 'text_only') setStatus(`There is no spoken voice for ${label(m.language)} with this voice model, so it arrives as text only.`);
   else if (m.type === 'partial') $('partial').textContent = m.text;
   else if (m.type === 'turn') showTurn(m);
   else if (m.type === 'translation') {

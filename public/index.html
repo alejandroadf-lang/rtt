@@ -62,17 +62,19 @@
 
   <section id="create" hidden>
     <h2>Start a conversation</h2>
-    <div class="row">
-      <div><label for="mine">I speak</label><select id="mine"></select></div>
-      <div><label for="theirs">They speak</label><select id="theirs"></select></div>
-    </div>
+    <p>You get two links: one for you, one for the other person. Each of you then chooses what you speak and what you hear.</p>
     <p style="margin-top:12px"><button id="start">Create room</button></p>
     <div id="links" class="links" hidden></div>
   </section>
 
   <section id="room" hidden>
-    <div class="bar">
-      <div><strong id="who"></strong> <span id="status" role="status"></span></div>
+    <div class="row">
+      <div><label for="mine">I speak</label><select id="mine"></select></div>
+      <div><label for="hear">I hear</label><select id="hear"></select></div>
+    </div>
+    <p id="theirs" style="margin-top:10px"></p>
+    <div class="bar" style="margin-top:12px">
+      <span id="status" role="status"></span>
       <button id="mic" aria-pressed="false">Start talking</button>
     </div>
     <p id="partial" aria-live="off"></p>

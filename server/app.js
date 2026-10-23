@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { createRoom, getRoom, seatFor, partnerSeat, languageName, LANGUAGES } from './rooms.js';
+import { createRoom, getRoom, seatFor, partnerSeat, setLanguages, hasVoice, LANGUAGES } from './rooms.js';
 import { addDocument, keyterms, MAX_DOC_BYTES } from './docs.js';
 import { createPipeline } from './pipeline.js';
 import { MIC_SAMPLE_RATE } from './voice.js';
@@ -31,7 +31,7 @@ export function describeStatus(env) {
   const missing = [];
   if (!(env.ELEVENLABS_API_KEY || '').trim()) missing.push('ELEVENLABS_API_KEY (speech-to-text and the translated voice)');
   if (!(env.ANTHROPIC_API_KEY || '').trim()) missing.push('ANTHROPIC_API_KEY (the translation itself)');
-  return { ready: !missing.length, missing, languages: LANGUAGES };
+  return { ready: !missing.length, missing, languages: LANGUAGES, voiceLanguages: Object.keys(LANGUAGES).filter((c) => hasVoice(c, env)) };
 }
 
 export function createApp({ env = process.env, translator, listen, speak }) {
@@ -45,6 +45,7 @@ export function createApp({ env = process.env, translator, listen, speak }) {
   const pipeline = createPipeline({
     translator,
     speak,
+    canSpeak: (code) => hasVoice(code, env),
     send: sendTo,
     sendAudio: (room, seatName, audio) => {
       const ws = room.seats[seatName].socket;
@@ -81,12 +82,11 @@ export function createApp({ env = process.env, translator, listen, speak }) {
       if (req.method === 'POST' && url.pathname === '/api/rooms') {
         const status = describeStatus(env);
         if (!status.ready) return json(res, 503, { error: `Rooms cannot start: set ${status.missing.join(' and ')} on the server.` });
-        const body = await readJson(req);
-        const room = createRoom({ hostLanguage: body.hostLanguage, guestLanguage: body.guestLanguage });
+        const room = createRoom();
         return json(res, 201, { roomId: room.id, hostToken: room.seats.host.token, guestToken: room.seats.guest.token });
       }
 
-      const match = url.pathname.match(/^\/api\/rooms\/([\w-]+)(\/docs)?$/);
+      const match = url.pathname.match(/^\/api\/rooms\/([\w-]+)(\/docs|\/me)?$/);
       if (match) {
         const room = getRoom(match[1]);
         const seat = room && seatFor(room, req.headers['x-room-token']);
@@ -94,16 +94,32 @@ export function createApp({ env = process.env, translator, listen, speak }) {
         if (!room || !seat) return json(res, 404, { error: 'No such room, or the link is wrong or has expired.' });
 
         if (req.method === 'GET' && !match[2]) {
+          const other = room.seats[partnerSeat(seat)];
           return json(res, 200, {
             you: seat,
-            yourLanguage: room.seats[seat].language,
-            theirLanguage: room.seats[partnerSeat(seat)].language,
-            theirLanguageName: languageName(room.seats[partnerSeat(seat)].language),
+            yourInput: room.seats[seat].input,
+            yourOutput: room.seats[seat].output,
+            theirInput: other.input,
+            theirOutput: other.output,
             documents: room.docs.map((d) => d.name),
-            partnerHere: Boolean(room.seats[partnerSeat(seat)].socket),
+            partnerHere: Boolean(other.socket),
           });
         }
-        if (req.method === 'POST' && match[2]) {
+        if (req.method === 'PUT' && match[2] === '/me') {
+          try {
+            const body = await readJson(req);
+            const { changedInput } = setLanguages(room, seat, { input: body.input, output: body.output });
+            // What the person speaks is what speech-to-text listens for, so changing it
+            // restarts listening; changing only what they hear takes effect on the next sentence.
+            if (changedInput && room.seats[seat].socket) await startListening(room, seat);
+            const mine = room.seats[seat];
+            sendTo(room, partnerSeat(seat), { type: 'partner_languages', input: mine.input, output: mine.output });
+            return json(res, 200, { input: mine.input, output: mine.output });
+          } catch (err) {
+            return json(res, err.status || 400, { error: err.message });
+          }
+        }
+        if (req.method === 'POST' && match[2] === '/docs') {
           const result = addDocument(room, await readJson(req));
           return json(res, result.ok ? 201 : 400, result.ok ? { documents: room.docs.map((d) => d.name) } : { error: result.reason });
         }
@@ -139,54 +155,64 @@ export function createApp({ env = process.env, translator, listen, speak }) {
     wss.handleUpgrade(req, socket, head, (ws) => attach(ws, room, seatName));
   });
 
-  async function attach(ws, room, seatName) {
+  // (Re)opens speech-to-text for a seat in the language it speaks now. Used when
+  // someone connects and when they change what they speak mid-conversation.
+  async function startListening(room, seatName) {
     const seat = room.seats[seatName];
-    // One connection per seat: a second tab replaces the first rather than both
-    // streaming audio into the same speech-to-text bill.
-    if (seat.socket && seat.socket !== ws) {
-      seat.socket.close(4000, 'Opened somewhere else');
-      sockets.get(seat)?.transcriber?.close();
-    }
-    seat.socket = ws;
-    const partnerName = partnerSeat(seatName);
-    sendTo(room, partnerName, { type: 'partner', here: true });
-    sendTo(room, seatName, { type: 'ready', partnerHere: Boolean(room.seats[partnerName].socket) });
-
-    let transcriber = null;
-    let seconds = 0;
+    sockets.get(seat)?.transcriber?.close();
+    sockets.delete(seat);
     const fail = (err) => sendTo(room, seatName, { type: 'error', message: err.message });
     try {
-      transcriber = await listen({
-        language: seat.language,
+      const transcriber = await listen({
+        language: seat.input,
         keyterms: keyterms(room),
         onPartial: (text) => sendTo(room, seatName, { type: 'partial', text }),
         onCommitted: (text) => runTurn(room, seatName, text),
         onError: fail,
       });
+      sockets.set(seat, { transcriber });
+      return true;
     } catch (err) {
       fail(new Error(`Could not start listening: ${err.message}`));
-      return ws.close(4001, 'Speech-to-text unavailable');
+      return false;
     }
-    sockets.set(seat, { transcriber });
+  }
+
+  async function attach(ws, room, seatName) {
+    const seat = room.seats[seatName];
+    const partnerName = partnerSeat(seatName);
+    const fail = (err) => sendTo(room, seatName, { type: 'error', message: err.message });
+    if (!seat.input || !seat.output) {
+      // The page sets these before it connects; a connection without them is not one of ours.
+      ws.send(JSON.stringify({ type: 'error', message: 'Choose what you speak and what you hear first.' }));
+      return ws.close(4003, 'Languages not chosen');
+    }
+    // One connection per seat: a second tab replaces the first rather than both
+    // streaming audio into the same speech-to-text bill.
+    if (seat.socket && seat.socket !== ws) seat.socket.close(4000, 'Opened somewhere else');
+    seat.socket = ws;
+    sendTo(room, partnerName, { type: 'partner', here: true });
+    sendTo(room, seatName, { type: 'ready', partnerHere: Boolean(room.seats[partnerName].socket) });
+
+    if (!(await startListening(room, seatName))) return ws.close(4001, 'Speech-to-text unavailable');
 
     ws.on('message', (data, isBinary) => {
       if (!isBinary) return;
       // Counted from the audio itself (16-bit mono), not from a clock a client could
       // slow down: this is what the speech-to-text bill is made of.
-      seconds += data.length / 2 / MIC_SAMPLE_RATE;
       room.secondsUsed += data.length / 2 / MIC_SAMPLE_RATE;
       if (room.secondsUsed > maxSeconds) {
         fail(new Error(`This room has used its ${maxSeconds / 60} minutes of speech. Start a new room to keep talking (ROOM_MAX_MINUTES sets the limit).`));
         return ws.close(4002, 'Room time used');
       }
-      transcriber.send(data);
+      sockets.get(seat)?.transcriber.send(data);
     });
     ws.on('close', () => {
-      transcriber.close();
-      if (seat.socket === ws) {
-        seat.socket = null;
-        sendTo(room, partnerName, { type: 'partner', here: false });
-      }
+      if (seat.socket !== ws) return;
+      sockets.get(seat)?.transcriber?.close();
+      sockets.delete(seat);
+      seat.socket = null;
+      sendTo(room, partnerName, { type: 'partner', here: false });
     });
   }
 

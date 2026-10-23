@@ -9,7 +9,7 @@ import WebSocket from 'ws';
 import { createApp, describeStatus } from '../server/app.js';
 import { createTranslator, buildSystem } from '../server/translate.js';
 import { addDocument, retrieve, keyterms, chunk } from '../server/docs.js';
-import { createRoom, seatFor, __clearRoomsForTests } from '../server/rooms.js';
+import { createRoom, seatFor, setLanguages, hasVoice, __clearRoomsForTests } from '../server/rooms.js';
 
 const ENV = { ELEVENLABS_API_KEY: 'x', ANTHROPIC_API_KEY: 'y' };
 
@@ -83,12 +83,14 @@ test('the translator sends only the parameters every model accepts', async () =>
 // ── rooms and access ─────────────────────────────────────────────────────────
 
 test('a token opens only its own seat', () => {
-  const room = createRoom({ hostLanguage: 'en', guestLanguage: 'es' });
+  const room = createRoom();
   assert.equal(seatFor(room, room.seats.host.token), 'host');
   assert.equal(seatFor(room, room.seats.guest.token), 'guest');
   assert.equal(seatFor(room, 'nope'), null);
   assert.equal(seatFor(room, ''), null);
-  assert.throws(() => createRoom({ hostLanguage: 'xx', guestLanguage: 'en' }), /not a language this app speaks/);
+  assert.throws(() => setLanguages(room, 'host', { input: 'xx', output: 'en' }), /"xx" is not a language this app can speak/);
+  assert.throws(() => setLanguages(room, 'host', { input: 'en', output: 'xx' }), /can hear/);
+  assert.equal(room.seats.host.input, null, 'a refused choice changes nothing');
 });
 
 test('without the keys the status names each missing variable and rooms are refused', async () => {
@@ -98,7 +100,7 @@ test('without the keys the status names each missing variable and rooms are refu
   assert.match(status.missing.join(' '), /ANTHROPIC_API_KEY/);
   const { server } = createApp({ env: {}, translator: {}, listen: async () => ({}), speak: async () => {} });
   const base = await start(server);
-  const res = await fetch(`${base}/api/rooms`, { method: 'POST', body: JSON.stringify({ hostLanguage: 'en', guestLanguage: 'es' }) });
+  const res = await fetch(`${base}/api/rooms`, { method: 'POST', body: '{}' });
   assert.equal(res.status, 503);
   assert.match((await res.json()).error, /ELEVENLABS_API_KEY/);
   stop(server);
@@ -107,6 +109,16 @@ test('without the keys the status names each missing variable and rooms are refu
 // ── a whole conversation ─────────────────────────────────────────────────────
 
 // close() alone waits for keep-alive connections from fetch, which never end by themselves.
+// A room whose two people have chosen what they speak and what they hear.
+async function newRoom(base, host = ['en', 'en'], guest = ['es', 'es']) {
+  const made = await (await fetch(`${base}/api/rooms`, { method: 'POST', body: '{}' })).json();
+  for (const [token, [input, output]] of [[made.hostToken, host], [made.guestToken, guest]]) {
+    const res = await fetch(`${base}/api/rooms/${made.roomId}/me`, { method: 'PUT', headers: { 'x-room-token': token }, body: JSON.stringify({ input, output }) });
+    assert.equal(res.status, 200);
+  }
+  return made;
+}
+
 const stop = (server) => { server.closeAllConnections(); server.close(); };
 
 function start(server) {
@@ -152,7 +164,7 @@ function harness() {
 test('one person speaks, the other reads and hears it in their language, with the documents behind it', async () => {
   const { app, heard, translations, spoken } = harness();
   const base = await start(app.server);
-  const made = await (await fetch(`${base}/api/rooms`, { method: 'POST', body: JSON.stringify({ hostLanguage: 'en', guestLanguage: 'es' }) })).json();
+  const made = await newRoom(base);
 
   const docRes = await fetch(`${base}/api/rooms/${made.roomId}/docs`, { method: 'POST', headers: { 'x-room-token': made.hostToken }, body: JSON.stringify({ name: 'contract.md', text: 'The Zephyrix contract has a penalty of 2% per week for late delivery.' }) });
   assert.equal(docRes.status, 201);
@@ -191,7 +203,7 @@ test('sentences are translated in the order they were said, even when an earlier
     speak: async () => {},
   });
   const base = await start(app.server);
-  const made = await (await fetch(`${base}/api/rooms`, { method: 'POST', body: JSON.stringify({ hostLanguage: 'en', guestLanguage: 'es' }) })).json();
+  const made = await newRoom(base);
   const a = await open(base, made.roomId, made.hostToken);
   const b = await open(base, made.roomId, made.guestToken);
   await until(() => a.messages.some((m) => m.type === 'partner'));
@@ -212,7 +224,7 @@ test('when translation fails the listener still gets the words, and the speaker 
     speak: async () => { throw new Error('must not speak a failed translation'); },
   });
   const base = await start(app.server);
-  const made = await (await fetch(`${base}/api/rooms`, { method: 'POST', body: JSON.stringify({ hostLanguage: 'en', guestLanguage: 'es' }) })).json();
+  const made = await newRoom(base);
   const host = await open(base, made.roomId, made.hostToken);
   const guest = await open(base, made.roomId, made.guestToken);
   await until(() => host.messages.some((m) => m.type === 'partner'));
@@ -230,7 +242,7 @@ test('when translation fails the listener still gets the words, and the speaker 
 test('two people who speak the same language are not translated or echoed', async () => {
   const { app, heard, translations, spoken } = harness();
   const base = await start(app.server);
-  const made = await (await fetch(`${base}/api/rooms`, { method: 'POST', body: JSON.stringify({ hostLanguage: 'en', guestLanguage: 'en' }) })).json();
+  const made = await newRoom(base, ['en', 'en'], ['en', 'en']);
   const host = await open(base, made.roomId, made.hostToken);
   const guest = await open(base, made.roomId, made.guestToken);
   await until(() => host.messages.some((m) => m.type === 'partner'));
@@ -247,7 +259,7 @@ test('two people who speak the same language are not translated or echoed', asyn
 test('a wrong token cannot read a room or upload to it, and says nothing about which part was wrong', async () => {
   const { app } = harness();
   const base = await start(app.server);
-  const made = await (await fetch(`${base}/api/rooms`, { method: 'POST', body: JSON.stringify({ hostLanguage: 'en', guestLanguage: 'es' }) })).json();
+  const made = await newRoom(base);
   const wrong = await fetch(`${base}/api/rooms/${made.roomId}`, { headers: { 'x-room-token': 'guess' } });
   const missing = await fetch(`${base}/api/rooms/nosuchroom`, { headers: { 'x-room-token': made.hostToken } });
   assert.equal(wrong.status, 404);
@@ -295,7 +307,7 @@ test('a room stops taking audio once its minutes are used, and says so', async (
     speak: async () => {},
   });
   const base = await start(app.server);
-  const made = await (await fetch(`${base}/api/rooms`, { method: 'POST', body: JSON.stringify({ hostLanguage: 'en', guestLanguage: 'es' }) })).json();
+  const made = await newRoom(base);
   const host = await open(base, made.roomId, made.hostToken);
   await until(() => host.messages.some((m) => m.type === 'ready'));
   host.ws.send(Buffer.alloc(3200)); // 100 ms of 16 kHz 16-bit audio
@@ -303,4 +315,97 @@ test('a room stops taking audio once its minutes are used, and says so', async (
   assert.match(host.messages.find((m) => m.type === 'error').message, /ROOM_MAX_MINUTES/);
   assert.equal(sent.length, 0, 'the audio over the limit was not forwarded');
   stop(app.server);
+});
+
+// ── choosing what you speak and what you hear ────────────────────────────────
+
+test('what a person speaks and what they hear are chosen separately: each sentence goes from the speaker\'s input to the listener\'s output', async () => {
+  const calls = [];
+  const said = {};
+  const app = createApp({
+    env: ENV,
+    translator: { translate: async (a) => { calls.push(a); return `${a.from}>${a.to}`; } },
+    listen: async ({ language, onCommitted }) => { said[language] = onCommitted; return { send() {}, close() {} }; },
+    speak: async (args) => { calls.push({ spoke: args.language }); },
+  });
+  const base = await start(app.server);
+  // Host speaks English but wants to hear Thai; guest speaks Spanish and hears Spanish.
+  const made = await newRoom(base, ['en', 'th'], ['es', 'es']);
+  const host = await open(base, made.roomId, made.hostToken);
+  const guest = await open(base, made.roomId, made.guestToken);
+  await until(() => host.messages.some((m) => m.type === 'partner'));
+
+  said.en('Hello');
+  await until(() => calls.some((c) => c.spoke));
+  assert.deepEqual(calls.filter((c) => c.from).map((c) => [c.from, c.to]), [['en', 'es']], 'the guest hears Spanish');
+  assert.equal(calls.find((c) => c.spoke).spoke, 'es');
+
+  calls.length = 0;
+  said.es('Hola');
+  await until(() => host.messages.some((m) => m.type === 'text_only'));
+  assert.deepEqual(calls.filter((c) => c.from).map((c) => [c.from, c.to]), [['es', 'th']], 'the host reads Thai although they speak English');
+  assert.equal(calls.some((c) => c.spoke), false, 'Flash v2.5 has no Thai voice, so nothing is spoken');
+  assert.ok(host.messages.some((m) => m.type === 'turn' && m.translated === 'es>th'), 'but the Thai text arrived');
+  assert.equal(host.messages.find((m) => m.type === 'text_only').language, 'th');
+  host.ws.close();
+  guest.ws.close();
+  stop(app.server);
+});
+
+test('changing what you speak restarts listening in the new language and tells the other person; changing what you hear does not', async () => {
+  const opened = [];
+  const closed = [];
+  const app = createApp({
+    env: ENV,
+    translator: {},
+    listen: async ({ language }) => { opened.push(language); return { send() {}, close: () => closed.push(language) }; },
+    speak: async () => {},
+  });
+  const base = await start(app.server);
+  const made = await newRoom(base);
+  const host = await open(base, made.roomId, made.hostToken);
+  const guest = await open(base, made.roomId, made.guestToken);
+  await until(() => opened.length === 2);
+  const put = (token, input, output) => fetch(`${base}/api/rooms/${made.roomId}/me`, { method: 'PUT', headers: { 'x-room-token': token }, body: JSON.stringify({ input, output }) });
+
+  assert.equal((await put(made.hostToken, 'en', 'fr')).status, 200);
+  assert.deepEqual(opened, ['en', 'es'], 'only the output changed: listening was left alone');
+  await until(() => guest.messages.some((m) => m.type === 'partner_languages' && m.output === 'fr'));
+
+  assert.equal((await put(made.hostToken, 'de', 'fr')).status, 200);
+  await until(() => opened.length === 3);
+  assert.equal(opened[2], 'de');
+  assert.deepEqual(closed, ['en'], 'the English listener was closed');
+  const info = await (await fetch(`${base}/api/rooms/${made.roomId}`, { headers: { 'x-room-token': made.guestToken } })).json();
+  assert.deepEqual([info.theirInput, info.theirOutput, info.yourInput], ['de', 'fr', 'es']);
+
+  const bad = await put(made.hostToken, 'xx', 'en');
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /not a language this app can speak/);
+  host.ws.close();
+  guest.ws.close();
+  stop(app.server);
+});
+
+test('a connection from someone who has not chosen languages is told to, and closed', async () => {
+  const { app } = harness();
+  const base = await start(app.server);
+  const made = await (await fetch(`${base}/api/rooms`, { method: 'POST', body: '{}' })).json();
+  const ws = new WebSocket(`${base.replace('http', 'ws')}/ws?room=${made.roomId}&token=${made.hostToken}`);
+  const got = [];
+  ws.on('message', (d) => got.push(JSON.parse(d.toString())));
+  const code = await new Promise((resolve) => ws.on('close', resolve));
+  assert.equal(code, 4003);
+  assert.match(got[0].message, /Choose what you speak and what you hear first/);
+  stop(app.server);
+});
+
+test('a language can be read without a voice, and the voice list can be widened for another model', () => {
+  assert.equal(hasVoice('es', {}), true);
+  assert.equal(hasVoice('th', {}), false);
+  assert.equal(hasVoice('th', { ELEVENLABS_VOICE_LANGUAGES: 'th, en' }), true);
+  assert.equal(hasVoice('es', { ELEVENLABS_VOICE_LANGUAGES: 'th, en' }), false);
+  const status = describeStatus(ENV);
+  assert.ok('th' in status.languages && !status.voiceLanguages.includes('th'));
+  assert.ok(status.voiceLanguages.includes('en'));
 });

@@ -15,7 +15,11 @@ cp .env.example .env   # set ELEVENLABS_API_KEY and ANTHROPIC_API_KEY, never com
 node --env-file=.env server/index.js
 ```
 
-Open `http://localhost:3000`, pick the two languages, create the room, and send the second link to the other person. Use headphones: with speakers the microphone hears the other person's translated voice and translates it again.
+Open `http://localhost:3000`, create the room, and send the second link to the other person. Each of you then chooses **I speak** and **I hear** (usually the same language; they can differ, and either can be changed mid-conversation). The page shows what the other person chose. Use headphones: with speakers the microphone hears the other person's translated voice and translates it again.
+
+## Languages
+
+Speech-to-text hears more languages than the voice model can speak. Flash v2.5 speaks 32 (no Thai, Hebrew, Bengali, Persian or Urdu); choosing one of those under **I hear** still works, the sentence arrives as text and the page says there is no voice. `ELEVENLABS_VOICE_LANGUAGES` widens the list when you configure a model with more voices.
 
 ## How the documents are used
 
